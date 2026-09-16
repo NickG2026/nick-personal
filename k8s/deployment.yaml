@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: se-accounts-data
+  namespace: se-account-manager
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: se-account-manager
+  namespace: se-account-manager
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # SQLite file can't be shared across two pods
+  selector:
+    matchLabels:
+      app: se-account-manager
+  template:
+    metadata:
+      labels:
+        app: se-account-manager
+    spec:
+      containers:
+        - name: se-account-manager
+          image: se-account-manager:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8501
+          envFrom:
+            - secretRef:
+                name: se-account-manager-secrets
+                optional: true
+          env:
+            - name: SE_DB_PATH
+              value: /data/se_accounts.db
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: se-accounts-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: se-account-manager
+  namespace: se-account-manager
+spec:
+  selector:
+    app: se-account-manager
+  ports:
+    - port: 8501
+      targetPort: 8501
+  type: ClusterIP
