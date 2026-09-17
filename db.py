@@ -7,7 +7,7 @@ just `ALTER TABLE` calls guarded by a try/except in `_migrate()`.
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 
 DB_PATH = os.environ.get("SE_DB_PATH", os.path.join(os.path.dirname(__file__), "data", "se_accounts.db"))
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -112,6 +112,17 @@ CREATE TABLE IF NOT EXISTS stakeholders (
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS calendar_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+    account_name TEXT,
+    title TEXT NOT NULL,
+    start_time TEXT NOT NULL,
+    end_time TEXT,
+    link TEXT,
+    synced_at TEXT DEFAULT (datetime('now'))
 );
 """
 
@@ -306,6 +317,69 @@ def update_child(table, row_id, **fields):
 def delete_child(table, row_id):
     with get_conn() as conn:
         conn.execute(f"DELETE FROM {table} WHERE id = ?", (row_id,))
+
+
+# ---------- Claude-driven Google Calendar sync (customer meetings this week) ----------
+# Same pattern as the Salesforce import: the app has no Google credentials of
+# its own. A Dashboard button flags the request; a Claude session with a
+# Calendar connector reads this week's events itself and writes results back
+# via apply_calendar_sync.py, which replaces this week's rows and clears it.
+
+_CAL_SYNC_KEY = "calendar_sync_requested_at"
+
+
+def _week_bounds():
+    today = datetime.now().date()
+    monday = today - timedelta(days=today.weekday())
+    sunday = monday + timedelta(days=6)
+    return monday.isoformat(), sunday.isoformat()
+
+
+def request_calendar_sync():
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (_CAL_SYNC_KEY, datetime.now().isoformat(sep=" ", timespec="seconds")),
+        )
+
+
+def clear_calendar_sync_request():
+    with get_conn() as conn:
+        conn.execute("DELETE FROM app_settings WHERE key = ?", (_CAL_SYNC_KEY,))
+
+
+def get_calendar_sync_request():
+    with get_conn() as conn:
+        row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (_CAL_SYNC_KEY,)).fetchone()
+        return row["value"] if row else None
+
+
+def clear_calendar_events_this_week():
+    monday, sunday = _week_bounds()
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM calendar_events WHERE substr(start_time, 1, 10) BETWEEN ? AND ?",
+            (monday, sunday),
+        )
+
+
+def add_calendar_event(title, start_time, end_time=None, account_name=None, account_id=None, link=None):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO calendar_events (account_id, account_name, title, start_time, end_time, link) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (account_id, account_name, title, start_time, end_time, link),
+        )
+
+
+def list_calendar_events_this_week():
+    monday, sunday = _week_bounds()
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM calendar_events WHERE substr(start_time, 1, 10) BETWEEN ? AND ? ORDER BY start_time",
+            (monday, sunday),
+        ).fetchall()
 
 
 # ---------- rollup counts for the dashboard ----------

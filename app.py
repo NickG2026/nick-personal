@@ -11,6 +11,7 @@ import re
 
 import pandas as pd
 import streamlit as st
+from st_aggrid import AgGrid, GridOptionsBuilder
 
 import db
 
@@ -55,21 +56,6 @@ def goto(page, account_id=None):
         st.session_state.selected_account = account_id
 
 
-# ------------------------------------------------------------------ sidebar --
-with st.sidebar:
-    st.markdown("### 🗂️ SE Account Manager")
-    st.button("Dashboard", use_container_width=True, on_click=goto, args=("Dashboard",))
-    st.button("＋ Add Account", use_container_width=True, on_click=goto, args=("Add Account",))
-    st.divider()
-    st.caption("Accounts")
-    for acc in db.list_accounts():
-        dot = HEALTH_COLOR.get(acc["health"], "#8180AC")
-        if st.button(f"● {acc['name']}", key=f"nav_{acc['id']}", use_container_width=True):
-            goto("Account", acc["id"])
-    st.divider()
-    st.caption(f"v{APP_VERSION}")
-
-
 def days_until(date_str):
     if not date_str:
         return None
@@ -91,6 +77,60 @@ def quarter_label(date_str):
     return f"{d.year}-Q{(d.month - 1) // 3 + 1}"
 
 
+def quarter_offset(quarter_str, offset):
+    """'2026-Q3' + 1 -> '2026-Q4'; handles year rollover in either direction."""
+    year_str, q_str = quarter_str.split("-Q")
+    year, q = int(year_str), int(q_str) + offset
+    while q > 4:
+        q -= 4
+        year += 1
+    while q < 1:
+        q += 4
+        year -= 1
+    return f"{year}-Q{q}"
+
+
+# ------------------------------------------------------------------ sidebar --
+with st.sidebar:
+    st.markdown("### 🗂️ SE Account Manager")
+    st.button("Dashboard", use_container_width=True, on_click=goto, args=("Dashboard",))
+    st.button("＋ Add Account", use_container_width=True, on_click=goto, args=("Add Account",))
+    st.divider()
+    st.caption("Accounts by Quarter Close")
+
+    _accounts = db.list_accounts()
+    _current_q = quarter_label(dt.date.today().isoformat())
+    _next_q = quarter_offset(_current_q, 1)
+
+    _buckets = {}
+    for _acc in _accounts:
+        _q = quarter_label(_acc["close_date"])
+        if _q is None:
+            _key = "No Close Date"
+        elif _q == _current_q:
+            _key = "Closing This Quarter"
+        elif _q == _next_q:
+            _key = "Closing Next Quarter"
+        else:
+            _key = f"Closing in {_q}"
+        _buckets.setdefault(_key, []).append(_acc)
+
+    _order = ["Closing This Quarter", "Closing Next Quarter"]
+    _order += sorted(k for k in _buckets if k not in _order and k != "No Close Date")
+    if "No Close Date" in _buckets:
+        _order.append("No Close Date")
+
+    for _key in _order:
+        _group = sorted(_buckets[_key], key=lambda a: a["name"])
+        with st.expander(f"{_key} ({len(_group)})", expanded=(_key == "Closing This Quarter")):
+            for _acc in _group:
+                _dot = HEALTH_COLOR.get(_acc["health"], "#8180AC")
+                if st.button(f"● {_acc['name']}", key=f"nav_{_acc['id']}", use_container_width=True):
+                    goto("Account", _acc["id"])
+    st.divider()
+    st.caption(f"v{APP_VERSION}")
+
+
 def parse_arr(value):
     """'$300,000' -> 300000.0; blank/unparseable -> 0.0"""
     if not value:
@@ -110,13 +150,14 @@ def render_dashboard():
     counts_by_health = {h: 0 for h in db.HEALTH_LEVELS}
     for a in accounts:
         counts_by_health[a["health"]] = counts_by_health.get(a["health"], 0) + 1
+    total_arr = sum(parse_arr(a["arr"]) for a in accounts)
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Total accounts", len(accounts))
     c2.metric("Healthy", counts_by_health.get("Healthy", 0))
-    c3.metric("Attention", counts_by_health.get("Attention", 0))
+    c3.metric("Customer meetings this week", len(db.list_calendar_events_this_week()))
     c4.metric("At Risk", counts_by_health.get("At Risk", 0))
-    c5.metric("Pending Slack syncs", len(db.list_pending_slack_syncs()))
+    c5.metric("Total ARR", f"${total_arr:,.0f}")
 
     pending_import = db.get_salesforce_import_request()
     if pending_import:
@@ -129,7 +170,8 @@ def render_dashboard():
         st.success('Requested — ask Claude to "import my Salesforce accounts."')
         st.rerun()
 
-    render_pipeline_tables(accounts)
+    render_pipeline_table(accounts)
+    render_calendar_card()
 
     st.subheader("Upcoming this week")
     upcoming = []
@@ -152,106 +194,73 @@ def render_dashboard():
             d, a, desc = item
             st.markdown(f"- **{a['name']}** — deliverable due in {d}d: {desc}")
 
-    st.subheader("Accounts")
-    if not accounts:
-        st.info("No accounts yet — add one from the sidebar.")
-        return
 
-    f1, f2, f3, f4 = st.columns(4)
-    sort_choice = f1.selectbox("Sort by", ["Name", "Health", "Next call date"])
-    quarter_options = sorted({quarter_label(a["close_date"]) for a in accounts if a["close_date"]})
-    stage_options = sorted({a["stage"] for a in accounts if a["stage"]})
-    ae_options = sorted({a["ae_assigned"] for a in accounts if a["ae_assigned"]})
-    quarter_filter = f2.multiselect("Quarter Close", quarter_options)
-    stage_filter = f3.multiselect("Stage", stage_options)
-    ae_filter = f4.multiselect("AE", ae_options)
-
-    if quarter_filter:
-        accounts = [a for a in accounts if quarter_label(a["close_date"]) in quarter_filter]
-    if stage_filter:
-        accounts = [a for a in accounts if a["stage"] in stage_filter]
-    if ae_filter:
-        accounts = [a for a in accounts if a["ae_assigned"] in ae_filter]
-
-    if sort_choice == "Health":
-        order = {"At Risk": 0, "Attention": 1, "Healthy": 2}
-        accounts = sorted(accounts, key=lambda a: order.get(a["health"], 3))
-    elif sort_choice == "Next call date":
-        accounts = sorted(accounts, key=lambda a: a["next_call_date"] or "9999-99-99")
-
-    if not accounts:
-        st.caption("No accounts match these filters.")
-
-    for a in accounts:
-        counts = db.open_counts(a["id"])
-        dot = HEALTH_COLOR.get(a["health"], "#8180AC")
-        with st.container():
-            st.markdown('<div class="se-card">', unsafe_allow_html=True)
-            cols = st.columns([2.6, 1.4, 1.6, 1.6, 2, 2, 1])
-            cols[0].markdown(
-                f"<span class='se-dot' style='background:{dot}'></span>"
-                f"<span class='se-title'>{a['name']}</span><br>"
-                f"<span class='se-muted'>AE: {a['ae_assigned'] or '—'}</span>",
-                unsafe_allow_html=True,
-            )
-            cols[1].markdown(
-                f"<span class='se-muted'>Stage</span><br>{a['stage'] or '—'}",
-                unsafe_allow_html=True,
-            )
-            cols[2].markdown(
-                f"<span class='se-muted'>Last call</span><br>{a['last_call_date'] or '—'}",
-                unsafe_allow_html=True,
-            )
-            cols[3].markdown(
-                f"<span class='se-muted'>Next call</span><br>{a['next_call_date'] or '—'} {a['next_call_time'] or ''}",
-                unsafe_allow_html=True,
-            )
-            cols[4].markdown(
-                f"<span class='se-muted'>Open items</span><br>"
-                f"{counts['deliverables']} deliverables · {counts['tasks']} tasks · {counts['blockers']} blockers",
-                unsafe_allow_html=True,
-            )
-            cols[5].markdown(
-                f"<span class='se-muted'>Status</span><br>{(a['status_summary'] or '—')[:80]}",
-                unsafe_allow_html=True,
-            )
-            cols[6].button("Open →", key=f"open_{a['id']}", on_click=goto, args=("Account", a["id"]))
-            st.markdown("</div>", unsafe_allow_html=True)
-
-
-def render_pipeline_tables(accounts):
+def render_pipeline_table(accounts):
     st.subheader("Pipeline overview")
-    if not accounts:
-        st.caption("No accounts yet.")
-        return
+    with st.container(border=True):
+        if not accounts:
+            st.caption("No accounts yet.")
+            return
 
-    by_stage = {}
-    by_quarter = {}
-    for a in accounts:
-        stage = a["stage"] or "—"
-        row = by_stage.setdefault(stage, {"Accounts": 0, "ARR": 0.0})
-        row["Accounts"] += 1
-        row["ARR"] += parse_arr(a["arr"])
+        rows = [
+            {
+                "Name": a["name"],
+                "Stage": a["stage"] or "—",
+                "Quarter Close": quarter_label(a["close_date"]) or "—",
+                "ARR": parse_arr(a["arr"]),
+                "AE": a["ae_assigned"] or "—",
+                "SE": a["se_assigned"] or "—",
+                "Health": a["health"],
+            }
+            for a in accounts
+        ]
+        df = pd.DataFrame(rows)
 
-        quarter = quarter_label(a["close_date"]) or "—"
-        row = by_quarter.setdefault(quarter, {"Accounts": 0, "ARR": 0.0})
-        row["Accounts"] += 1
-        row["ARR"] += parse_arr(a["arr"])
+        gb = GridOptionsBuilder.from_dataframe(df)
+        gb.configure_default_column(filter=True, sortable=True, resizable=True, floatingFilter=True)
+        gb.configure_column("ARR", type=["numericColumn"], valueFormatter="'$' + value.toLocaleString()")
+        AgGrid(
+            df, gridOptions=gb.build(), height=380, fit_columns_on_grid_load=True,
+            theme="streamlit", allow_unsafe_jscode=True,
+        )
 
-    stage_df = pd.DataFrame(
-        [{"Stage": k, "Accounts": v["Accounts"], "Total ARR": f"${v['ARR']:,.0f}"} for k, v in by_stage.items()]
-    ).sort_values("Stage")
-    quarter_df = pd.DataFrame(
-        [{"Quarter Close": k, "Accounts": v["Accounts"], "Total ARR": f"${v['ARR']:,.0f}"} for k, v in by_quarter.items()]
-    ).sort_values("Quarter Close")
 
-    t1, t2 = st.columns(2)
-    with t1:
-        st.caption("By Stage")
-        st.dataframe(stage_df, use_container_width=True, hide_index=True)
-    with t2:
-        st.caption("By Quarter Close")
-        st.dataframe(quarter_df, use_container_width=True, hide_index=True)
+def render_calendar_card():
+    with st.container(border=True):
+        h1, h2 = st.columns([5, 1.6])
+        h1.subheader("This Week's Customer Meetings")
+
+        pending = db.get_calendar_sync_request()
+        if pending:
+            st.info(f'Calendar sync requested at {pending} — ask Claude to "sync my calendar" to complete it.')
+            if st.button("Cancel calendar sync request"):
+                db.clear_calendar_sync_request()
+                st.rerun()
+        elif h2.button("🔔 Sync calendar"):
+            db.request_calendar_sync()
+            st.success('Requested — ask Claude to "sync my calendar."')
+            st.rerun()
+
+        events = db.list_calendar_events_this_week()
+        if not events:
+            st.caption("No customer meetings synced for this week yet.")
+            return
+
+        by_day = {}
+        for e in events:
+            by_day.setdefault(e["start_time"][:10], []).append(e)
+
+        cols = st.columns(len(by_day))
+        for col, day in zip(cols, sorted(by_day.keys())):
+            with col:
+                st.markdown(f"**{dt.date.fromisoformat(day).strftime('%a %m/%d')}**")
+                for e in sorted(by_day[day], key=lambda x: x["start_time"]):
+                    tag = f" · {e['account_name']}" if e["account_name"] else ""
+                    text = f"{e['start_time'][11:16]} — {e['title']}{tag}"
+                    if e["link"]:
+                        st.markdown(f"<a href='{e['link']}' style='font-size:0.85rem'>{text}</a>", unsafe_allow_html=True)
+                    else:
+                        st.caption(text)
 
 
 # ------------------------------------------------------------- add account --

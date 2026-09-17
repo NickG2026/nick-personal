@@ -140,6 +140,31 @@ It matches existing accounts by name (case-insensitive) and updates them,
 or creates a new account for anything not already tracked — either way it
 leaves a Timeline note recording the import.
 
+## Calendar sync (also via Claude)
+
+Same request/fulfill pattern again, for the Dashboard's "This Week's
+Customer Meetings" card:
+
+1. Click "🔔 Sync calendar" on that card — timestamps
+   `calendar_sync_requested_at` in `app_settings`.
+2. Ask Claude to **"sync my calendar."** It reads this week's events via
+   its own Google Calendar connector, filters down to genuine
+   customer-facing meetings (external attendees, not internal prep/syncs),
+   matches each to a tracked account by name where possible, and persists
+   the result by piping JSON into `apply_calendar_sync.py`:
+
+```bash
+echo '[{"title": "Acme Corp | QBR", "start_time": "2026-09-18T14:00:00",
+        "end_time": "2026-09-18T15:00:00", "account_name": "Acme Corp",
+        "link": "https://meet.google.com/..."}]' \
+  | python apply_calendar_sync.py
+```
+
+This replaces whatever was previously synced for the current week (so
+re-running doesn't duplicate) and clears the pending request. The
+Dashboard's "Customer meetings this week" metric and calendar card both
+read from this table.
+
 ## Adding a field or feature
 
 - New column on an account: add it to `SCHEMA` in `db.py` (the `accounts`

@@ -41,6 +41,7 @@ def apply(account_id, result):
 
 
 if __name__ == "__main__":
+    db.init_db()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("account_id", type=int)
     parser.add_argument("--json-file", help="Path to result JSON; reads stdin if omitted.")

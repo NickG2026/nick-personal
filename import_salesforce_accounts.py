@@ -53,5 +53,6 @@ def apply(records):
 
 
 if __name__ == "__main__":
+    db.init_db()
     raw = sys.stdin.read()
     apply(json.loads(raw))
