@@ -107,6 +107,11 @@ CREATE TABLE IF NOT EXISTS stakeholders (
     notes TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 
@@ -236,6 +241,31 @@ def find_account_by_name(name):
         return conn.execute(
             "SELECT * FROM accounts WHERE name = ? COLLATE NOCASE", (name.strip(),)
         ).fetchone()
+
+
+# ---------- global "import all my Salesforce accounts" request (Dashboard button) ----------
+
+_SF_IMPORT_KEY = "salesforce_import_requested_at"
+
+
+def request_salesforce_import():
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (_SF_IMPORT_KEY, datetime.now().isoformat(sep=" ", timespec="seconds")),
+        )
+
+
+def clear_salesforce_import_request():
+    with get_conn() as conn:
+        conn.execute("DELETE FROM app_settings WHERE key = ?", (_SF_IMPORT_KEY,))
+
+
+def get_salesforce_import_request():
+    with get_conn() as conn:
+        row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (_SF_IMPORT_KEY,)).fetchone()
+        return row["value"] if row else None
 
 
 # ---------- generic child-table helpers (deliverables, tasks, notes, blockers, stakeholders) ----------

@@ -93,6 +93,17 @@ def render_dashboard():
     c4.metric("At Risk", counts_by_health.get("At Risk", 0))
     c5.metric("Pending Slack syncs", len(db.list_pending_slack_syncs()))
 
+    pending_import = db.get_salesforce_import_request()
+    if pending_import:
+        st.info(f'Salesforce import requested at {pending_import} — ask Claude to "import my Salesforce accounts" to complete it.')
+        if st.button("Cancel Salesforce import request"):
+            db.clear_salesforce_import_request()
+            st.rerun()
+    elif st.button("🔔 Request Salesforce import (all accounts where I'm SE)"):
+        db.request_salesforce_import()
+        st.success('Requested — ask Claude to "import my Salesforce accounts."')
+        st.rerun()
+
     st.subheader("Upcoming this week")
     upcoming = []
     for a in accounts:

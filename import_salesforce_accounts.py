@@ -1,15 +1,18 @@
 """Bulk create/update accounts from Salesforce records pulled by Claude.
 
-Not run by the app. When asked to "import my Salesforce accounts," Claude
-queries Salesforce (via its own connector) for opportunities/accounts where
-the user is listed as SE, builds a JSON array of records, and pipes it in:
+Not run by the app directly, but the Dashboard has a "Request Salesforce
+import" button (db.request_salesforce_import()) that flags this as wanted.
+When asked to "import my Salesforce accounts," Claude queries Salesforce
+(via its own connector) for opportunities/accounts where the user is listed
+as SE, builds a JSON array of records, and pipes it in:
 
   echo '[{"name": "Acme Corp", "ae_assigned": "...", "se_assigned": "...",
           "stage": "POC", "arr": "$300,000", "salesforce_url": "..."}]' \
     | python import_salesforce_accounts.py
 
 Matches existing accounts by name (case-insensitive); creates new ones for
-anything not already tracked. Every record leaves a Timeline note either way.
+anything not already tracked. Every record leaves a Timeline note either
+way, and this clears the pending import request when done.
 """
 import datetime as dt
 import json
@@ -45,6 +48,7 @@ def apply(records):
                     f"ARR: {rec.get('arr', '—')})",
         )
 
+    db.clear_salesforce_import_request()
     print(f"Created {created}, updated {updated} account(s) from Salesforce.")
 
 
