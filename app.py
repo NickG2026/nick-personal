@@ -11,6 +11,7 @@ import re
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from st_aggrid import AgGrid, GridOptionsBuilder, StAggridTheme
 
 import db
@@ -260,32 +261,150 @@ def render_calendar_card():
             st.rerun()
 
         events = db.list_calendar_events_four_weeks()
-        by_date = {}
-        for e in events:
-            by_date.setdefault(e["start_time"][:10], []).append(e)
+        html = _build_calendar_html(events, num_weeks=4)
+        components.html(html, height=650, scrolling=True)
 
-        monday = dt.date.today() - dt.timedelta(days=dt.date.today().weekday())
-        weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 
-        for week in range(4):
-            week_monday = monday + dt.timedelta(days=7 * week)
-            cols = st.columns(5)
-            for i, col in enumerate(cols):
-                day = week_monday + dt.timedelta(days=i)
-                with col:
-                    st.markdown(f"**{weekday_names[i]} {day.strftime('%m/%d')}**")
-                    day_events = sorted(by_date.get(day.isoformat(), []), key=lambda x: x["start_time"])
-                    if not day_events:
-                        st.caption("—")
-                    for e in day_events:
-                        tag = f" · {e['account_name']}" if e["account_name"] else ""
-                        text = f"{e['start_time'][11:16]} — {e['title']}{tag}"
-                        if e["link"]:
-                            st.markdown(f"<a href='{e['link']}' style='font-size:0.8rem'>{text}</a>", unsafe_allow_html=True)
-                        else:
-                            st.caption(text)
-            if week < 3:
-                st.divider()
+def _fmt_hour_label(hour):
+    period = "AM" if hour % 24 < 12 else "PM"
+    h12 = hour % 12
+    if h12 == 0:
+        h12 = 12
+    return f"{h12} {period}"
+
+
+def _fmt_clock(t):
+    period = "AM" if t.hour < 12 else "PM"
+    h12 = t.hour % 12
+    if h12 == 0:
+        h12 = 12
+    return f"{h12}:{t.minute:02d} {period}"
+
+
+def _build_calendar_html(events, num_weeks=4, day_start_hour=8, day_end_hour=19):
+    """Google-Calendar-style week grid: hour rows down the side, Mon-Fri
+    columns, events as time-positioned blocks — stacked for `num_weeks`."""
+    row_h = 44  # px per hour
+    gutter_w = 50
+    total_hours = day_end_hour - day_start_hour
+    grid_h = total_hours * row_h
+
+    by_date = {}
+    for e in events:
+        by_date.setdefault(e["start_time"][:10], []).append(e)
+
+    monday = dt.date.today() - dt.timedelta(days=dt.date.today().weekday())
+    today = dt.date.today()
+    now = dt.datetime.now()
+    weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    gridlines_bg = (
+        f"repeating-linear-gradient(to bottom, #1B1A6A 0, #1B1A6A 1px, transparent 1px, transparent {row_h}px)"
+    )
+
+    weeks_html = []
+    for week in range(num_weeks):
+        week_monday = monday + dt.timedelta(days=7 * week)
+
+        day_headers = []
+        for i in range(5):
+            day = week_monday + dt.timedelta(days=i)
+            if day == today:
+                date_badge = f"<span style='background:#E0433C;color:#fff;border-radius:50%;padding:1px 7px;'>{day.day}</span>"
+            else:
+                date_badge = f"<span style='color:#F4F4FF;'>{day.day}</span>"
+            day_headers.append(
+                f"<div style='flex:1;text-align:center;font-size:12.5px;color:#8180AC;padding-bottom:4px;'>"
+                f"{weekday_names[i]} {date_badge}</div>"
+            )
+        header_html = f"<div style='display:flex;'><div style='width:{gutter_w}px;'></div>{''.join(day_headers)}</div>"
+
+        hour_labels = "".join(
+            f"<div style='position:absolute;top:{(h - day_start_hour) * row_h - 7}px;left:0;width:{gutter_w - 8}px;"
+            f"text-align:right;font-size:10.5px;color:#8180AC;'>{_fmt_hour_label(h)}</div>"
+            for h in range(day_start_hour, day_end_hour + 1)
+        )
+
+        day_cols = []
+        for i in range(5):
+            day = week_monday + dt.timedelta(days=i)
+            day_events = by_date.get(day.isoformat(), [])
+
+            parsed = []
+            for e in day_events:
+                s = dt.datetime.fromisoformat(e["start_time"])
+                en = dt.datetime.fromisoformat(e["end_time"]) if e["end_time"] else s + dt.timedelta(hours=1)
+                parsed.append({"e": e, "s": s, "en": en})
+            parsed.sort(key=lambda p: p["s"])
+
+            lane_end_times = []
+            assignments = []
+            for p in parsed:
+                placed = False
+                for lane, end in enumerate(lane_end_times):
+                    if p["s"] >= end:
+                        lane_end_times[lane] = p["en"]
+                        assignments.append((p, lane))
+                        placed = True
+                        break
+                if not placed:
+                    lane_end_times.append(p["en"])
+                    assignments.append((p, len(lane_end_times) - 1))
+            total_lanes = max(1, len(lane_end_times))
+
+            blocks = []
+            for p, lane in assignments:
+                s_h = max(p["s"].hour + p["s"].minute / 60, day_start_hour)
+                en_h = min(max(p["en"].hour + p["en"].minute / 60, s_h + 0.25), day_end_hour)
+                top = (s_h - day_start_hour) * row_h
+                height = max((en_h - s_h) * row_h, 18)
+                lane_w = 100 / total_lanes
+                left = lane * lane_w
+                tag = f" · {p['e']['account_name']}" if p["e"]["account_name"] else ""
+                inner = f"<b>{_fmt_clock(p['s'])}</b> {p['e']['title']}{tag}"
+                link = p["e"]["link"]
+                content = (
+                    f"<a href='{link}' target='_blank' style='color:#F4F4FF;text-decoration:none;'>{inner}</a>"
+                    if link else inner
+                )
+                blocks.append(
+                    f"<div style='position:absolute;top:{top}px;height:{height}px;"
+                    f"left:calc({left}% + 2px);width:calc({lane_w}% - 4px);"
+                    f"background:#2A1B75;border-left:3px solid #5050EE;border-radius:4px;"
+                    f"padding:2px 5px;font-size:11px;line-height:1.25;color:#F4F4FF;overflow:hidden;'>{content}</div>"
+                )
+
+            now_line = ""
+            if day == today and day_start_hour <= now.hour < day_end_hour:
+                now_top = (now.hour + now.minute / 60 - day_start_hour) * row_h
+                now_line = (
+                    f"<div style='position:absolute;top:{now_top}px;left:-4px;width:8px;height:8px;"
+                    f"border-radius:50%;background:#E0433C;'></div>"
+                    f"<div style='position:absolute;top:{now_top + 3}px;left:0;right:0;height:2px;background:#E0433C;'></div>"
+                )
+
+            day_cols.append(
+                f"<div style='position:relative;flex:1;border-left:1px solid #1B1A6A;height:{grid_h}px;"
+                f"background-image:{gridlines_bg};background-size:100% {row_h}px;background-repeat:repeat-y;'>"
+                f"{''.join(blocks)}{now_line}</div>"
+            )
+
+        body_html = (
+            f"<div style='position:relative;height:{grid_h}px;display:flex;'>"
+            f"<div style='position:relative;width:{gutter_w}px;'>{hour_labels}</div>"
+            f"{''.join(day_cols)}</div>"
+        )
+
+        weeks_html.append(
+            f"<div style='margin-bottom:18px;'>"
+            f"<div style='font-size:11.5px;color:#8180AC;margin-bottom:4px;'>Week of {week_monday.month}/{week_monday.day}</div>"
+            f"{header_html}{body_html}</div>"
+        )
+
+    return (
+        "<style>body{margin:0;background:#100A2C;}</style>"
+        "<div style='font-family:\"Open Sans\",system-ui,sans-serif;background:#100A2C;padding:6px 10px;'>"
+        + "".join(weeks_html) + "</div>"
+    )
 
 
 # ------------------------------------------------------------- add account --
