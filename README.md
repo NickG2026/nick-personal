@@ -1,7 +1,3 @@
-HEAD
-# nick-personal
-Nick's Work
-
 # SE Account Manager
 
 Personal daily-driver for tracking your accounts: health, last/next call,
@@ -122,4 +118,3 @@ Setup:
 - Existing SQLite files aren't auto-migrated — for a new column on an
   existing DB, either delete `data/se_accounts.db` (loses data) or run a
   one-off `ALTER TABLE accounts ADD COLUMN ...` against it.
->>>>>>> e39d1ad (Inital commit)

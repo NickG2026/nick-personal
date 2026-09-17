@@ -81,6 +81,18 @@ CREATE TABLE IF NOT EXISTS blockers (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS account_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    changed_at TEXT DEFAULT (datetime('now')),
+    source TEXT DEFAULT 'manual',
+    status_summary TEXT,
+    last_call_date TEXT,
+    last_call_summary TEXT,
+    next_call_date TEXT,
+    next_call_time TEXT
+);
+
 CREATE TABLE IF NOT EXISTS stakeholders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -130,6 +142,25 @@ def update_account(account_id, **fields):
 def delete_account(account_id):
     with get_conn() as conn:
         conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+
+
+def log_history(account_id, source="manual", **snapshot):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO account_history (account_id, source, status_summary, last_call_date, "
+            "last_call_summary, next_call_date, next_call_time) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                account_id, source, snapshot.get("status_summary"), snapshot.get("last_call_date"),
+                snapshot.get("last_call_summary"), snapshot.get("next_call_date"), snapshot.get("next_call_time"),
+            ),
+        )
+
+
+def list_history(account_id):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM account_history WHERE account_id = ? ORDER BY changed_at DESC", (account_id,)
+        ).fetchall()
 
 
 # ---------- generic child-table helpers (deliverables, tasks, notes, blockers, stakeholders) ----------

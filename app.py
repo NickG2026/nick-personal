@@ -16,6 +16,8 @@ import slack_sync
 st.set_page_config(page_title="SE Account Manager", layout="wide", page_icon="🗂️")
 db.init_db()
 
+APP_VERSION = "2026-09-16.2 (Slack+Claude sync, history log)"
+
 # ---------------------------------------------------------------- styling --
 HEALTH_COLOR = {"Healthy": "#1DDB8C", "Attention": "#5050EE", "At Risk": "#FF4689"}
 
@@ -62,6 +64,8 @@ with st.sidebar:
         dot = HEALTH_COLOR.get(acc["health"], "#8180AC")
         if st.button(f"● {acc['name']}", key=f"nav_{acc['id']}", use_container_width=True):
             goto("Account", acc["id"])
+    st.divider()
+    st.caption(f"v{APP_VERSION}")
 
 
 def days_until(date_str):
@@ -213,6 +217,10 @@ def render_account():
                 grafana_url=grafana_url, salesforce_url=salesforce_url, slack_url=slack_url,
                 slack_channel_id=slack_channel_id,
             )
+            db.log_history(
+                acc["id"], source="manual", status_summary=status_summary, last_call_date=last_call_date,
+                last_call_summary=last_call_summary, next_call_date=next_call_date, next_call_time=next_call_time,
+            )
             st.success("Saved.")
             st.rerun()
 
@@ -233,13 +241,18 @@ def render_account():
                 "notes", acc["id"], note_date=dt.date.today().isoformat(),
                 summary=f"Synced from Slack via Claude: {result['status_summary'][:300]}",
             )
+            db.log_history(
+                acc["id"], source="slack_sync", status_summary=result["status_summary"],
+                last_call_date=acc["last_call_date"], last_call_summary=acc["last_call_summary"],
+                next_call_date=acc["next_call_date"], next_call_time=acc["next_call_time"],
+            )
             st.success("Synced from Slack.")
             st.rerun()
         except Exception as e:
             st.error(f"Sync failed: {e}")
 
     st.divider()
-    tabs = st.tabs(["Deliverables", "Tasks", "Meeting Notes", "Blockers", "Stakeholders"])
+    tabs = st.tabs(["Deliverables", "Tasks", "Meeting Notes", "Blockers", "Stakeholders", "History"])
 
     with tabs[0]:
         render_child_section("deliverables", acc["id"], ["description", "due_date", "status"], statuses=["Open", "Done"])
@@ -251,6 +264,19 @@ def render_account():
         render_child_section("blockers", acc["id"], ["description", "link", "status"], statuses=["Open", "Resolved"])
     with tabs[4]:
         render_child_section("stakeholders", acc["id"], ["name", "role", "email", "notes"])
+    with tabs[5]:
+        history = db.list_history(acc["id"])
+        if not history:
+            st.caption("No history yet — saved changes will show up here.")
+        for h in history:
+            with st.container():
+                st.markdown(
+                    f"**{h['changed_at']}** · _{h['source']}_  \n"
+                    f"Status: {h['status_summary'] or '—'}  \n"
+                    f"Last call: {h['last_call_date'] or '—'} — {h['last_call_summary'] or '—'}  \n"
+                    f"Next call: {h['next_call_date'] or '—'} {h['next_call_time'] or ''}"
+                )
+                st.divider()
 
 
 def render_child_section(table, account_id, fields, statuses=None):
