@@ -458,7 +458,14 @@ def render_work_items(account_id):
                 key=f"status_{table}_{row['id']}", label_visibility="collapsed",
             )
             if new_status != row["status"]:
-                db.update_child(table, row["id"], status=new_status)
+                if new_status == "Done":
+                    db.delete_child(table, row["id"])
+                    db.add_child(
+                        "notes", account_id, note_date=dt.date.today().isoformat(),
+                        summary=f"{item_type} complete: {row['description']}",
+                    )
+                else:
+                    db.update_child(table, row["id"], status=new_status)
                 st.rerun()
             if cols[4].button("Delete", key=f"del_{table}_{row['id']}"):
                 db.delete_child(table, row["id"])
