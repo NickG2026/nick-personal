@@ -17,7 +17,7 @@ import sys
 
 import db
 
-UPDATABLE_FIELDS = ("stage", "arr", "salesforce_url", "ae_assigned", "se_assigned")
+UPDATABLE_FIELDS = ("stage", "arr", "salesforce_url", "ae_assigned", "se_assigned", "close_date")
 
 
 def apply(account_id, result):

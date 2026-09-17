@@ -20,7 +20,7 @@ import sys
 
 import db
 
-UPDATABLE_FIELDS = ("ae_assigned", "se_assigned", "stage", "arr", "salesforce_url")
+UPDATABLE_FIELDS = ("ae_assigned", "se_assigned", "stage", "arr", "close_date", "salesforce_url")
 
 
 def apply(records):

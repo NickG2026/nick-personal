@@ -7,7 +7,9 @@ Everything lives in three files: app.py (UI), db.py (SQLite), data/ (the DB
 file). Add a field: add a column in db.py's SCHEMA + a widget below.
 """
 import datetime as dt
+import re
 
+import pandas as pd
 import streamlit as st
 
 import db
@@ -27,12 +29,13 @@ st.markdown(
       #MainMenu, footer, header {visibility: hidden;}
       .block-container {padding-top: 1.5rem; max-width: 1400px;}
       .se-card {
-        background: #100A2C; border: 1px solid #1B1A6A; border-radius: 10px;
-        padding: 16px 18px; margin-bottom: 12px;
+        background: #100A2C; border: 1px solid #1B1A6A; border-radius: 8px;
+        padding: 8px 14px; margin-bottom: 4px; line-height: 1.25;
       }
       .se-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:8px; }
       .se-muted { color:#8180AC; font-size:0.85rem; }
       .se-title { font-size:1.05rem; font-weight:600; color:#F4F4FF; }
+      .se-card p { margin-bottom: 0; }
       div[data-testid="stMetricValue"] { color:#F4F4FF; }
       a { color:#B6B6FD; }
     </style>
@@ -77,6 +80,28 @@ def days_until(date_str):
         return None
 
 
+def quarter_label(date_str):
+    """'2026-09-30' -> '2026-Q3' (sorts correctly as a plain string)."""
+    if not date_str:
+        return None
+    try:
+        d = dt.date.fromisoformat(date_str)
+    except ValueError:
+        return None
+    return f"{d.year}-Q{(d.month - 1) // 3 + 1}"
+
+
+def parse_arr(value):
+    """'$300,000' -> 300000.0; blank/unparseable -> 0.0"""
+    if not value:
+        return 0.0
+    digits = re.sub(r"[^0-9.]", "", value)
+    try:
+        return float(digits) if digits else 0.0
+    except ValueError:
+        return 0.0
+
+
 # ---------------------------------------------------------------- dashboard --
 def render_dashboard():
     accounts = db.list_accounts()
@@ -104,6 +129,8 @@ def render_dashboard():
         st.success('Requested — ask Claude to "import my Salesforce accounts."')
         st.rerun()
 
+    render_pipeline_tables(accounts)
+
     st.subheader("Upcoming this week")
     upcoming = []
     for a in accounts:
@@ -130,19 +157,37 @@ def render_dashboard():
         st.info("No accounts yet — add one from the sidebar.")
         return
 
-    sort_choice = st.selectbox("Sort by", ["Name", "Health", "Next call date"], label_visibility="collapsed")
+    f1, f2, f3, f4 = st.columns(4)
+    sort_choice = f1.selectbox("Sort by", ["Name", "Health", "Next call date"])
+    quarter_options = sorted({quarter_label(a["close_date"]) for a in accounts if a["close_date"]})
+    stage_options = sorted({a["stage"] for a in accounts if a["stage"]})
+    ae_options = sorted({a["ae_assigned"] for a in accounts if a["ae_assigned"]})
+    quarter_filter = f2.multiselect("Quarter Close", quarter_options)
+    stage_filter = f3.multiselect("Stage", stage_options)
+    ae_filter = f4.multiselect("AE", ae_options)
+
+    if quarter_filter:
+        accounts = [a for a in accounts if quarter_label(a["close_date"]) in quarter_filter]
+    if stage_filter:
+        accounts = [a for a in accounts if a["stage"] in stage_filter]
+    if ae_filter:
+        accounts = [a for a in accounts if a["ae_assigned"] in ae_filter]
+
     if sort_choice == "Health":
         order = {"At Risk": 0, "Attention": 1, "Healthy": 2}
         accounts = sorted(accounts, key=lambda a: order.get(a["health"], 3))
     elif sort_choice == "Next call date":
         accounts = sorted(accounts, key=lambda a: a["next_call_date"] or "9999-99-99")
 
+    if not accounts:
+        st.caption("No accounts match these filters.")
+
     for a in accounts:
         counts = db.open_counts(a["id"])
         dot = HEALTH_COLOR.get(a["health"], "#8180AC")
         with st.container():
             st.markdown('<div class="se-card">', unsafe_allow_html=True)
-            cols = st.columns([3, 2, 2, 2, 2, 1])
+            cols = st.columns([2.6, 1.4, 1.6, 1.6, 2, 2, 1])
             cols[0].markdown(
                 f"<span class='se-dot' style='background:{dot}'></span>"
                 f"<span class='se-title'>{a['name']}</span><br>"
@@ -150,24 +195,63 @@ def render_dashboard():
                 unsafe_allow_html=True,
             )
             cols[1].markdown(
-                f"<span class='se-muted'>Last call</span><br>{a['last_call_date'] or '—'}",
+                f"<span class='se-muted'>Stage</span><br>{a['stage'] or '—'}",
                 unsafe_allow_html=True,
             )
             cols[2].markdown(
-                f"<span class='se-muted'>Next call</span><br>{a['next_call_date'] or '—'} {a['next_call_time'] or ''}",
+                f"<span class='se-muted'>Last call</span><br>{a['last_call_date'] or '—'}",
                 unsafe_allow_html=True,
             )
             cols[3].markdown(
+                f"<span class='se-muted'>Next call</span><br>{a['next_call_date'] or '—'} {a['next_call_time'] or ''}",
+                unsafe_allow_html=True,
+            )
+            cols[4].markdown(
                 f"<span class='se-muted'>Open items</span><br>"
                 f"{counts['deliverables']} deliverables · {counts['tasks']} tasks · {counts['blockers']} blockers",
                 unsafe_allow_html=True,
             )
-            cols[4].markdown(
+            cols[5].markdown(
                 f"<span class='se-muted'>Status</span><br>{(a['status_summary'] or '—')[:80]}",
                 unsafe_allow_html=True,
             )
-            cols[5].button("Open →", key=f"open_{a['id']}", on_click=goto, args=("Account", a["id"]))
+            cols[6].button("Open →", key=f"open_{a['id']}", on_click=goto, args=("Account", a["id"]))
             st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_pipeline_tables(accounts):
+    st.subheader("Pipeline overview")
+    if not accounts:
+        st.caption("No accounts yet.")
+        return
+
+    by_stage = {}
+    by_quarter = {}
+    for a in accounts:
+        stage = a["stage"] or "—"
+        row = by_stage.setdefault(stage, {"Accounts": 0, "ARR": 0.0})
+        row["Accounts"] += 1
+        row["ARR"] += parse_arr(a["arr"])
+
+        quarter = quarter_label(a["close_date"]) or "—"
+        row = by_quarter.setdefault(quarter, {"Accounts": 0, "ARR": 0.0})
+        row["Accounts"] += 1
+        row["ARR"] += parse_arr(a["arr"])
+
+    stage_df = pd.DataFrame(
+        [{"Stage": k, "Accounts": v["Accounts"], "Total ARR": f"${v['ARR']:,.0f}"} for k, v in by_stage.items()]
+    ).sort_values("Stage")
+    quarter_df = pd.DataFrame(
+        [{"Quarter Close": k, "Accounts": v["Accounts"], "Total ARR": f"${v['ARR']:,.0f}"} for k, v in by_quarter.items()]
+    ).sort_values("Quarter Close")
+
+    t1, t2 = st.columns(2)
+    with t1:
+        st.caption("By Stage")
+        st.dataframe(stage_df, use_container_width=True, hide_index=True)
+    with t2:
+        st.caption("By Quarter Close")
+        st.dataframe(quarter_df, use_container_width=True, hide_index=True)
 
 
 # ------------------------------------------------------------- add account --
@@ -260,6 +344,8 @@ def render_account_report(acc):
     c3.metric("Stage", acc["stage"] or "—")
     c4.metric("ARR", acc["arr"] or "—")
     c5.metric("Health", acc["health"])
+    if acc["close_date"]:
+        st.caption(f"Close date: {acc['close_date']} ({quarter_label(acc['close_date'])})")
 
     c6, c7 = st.columns(2)
     with c6:
@@ -285,9 +371,10 @@ def render_account_edit_form(acc, edit_key):
         se = c2.text_input("SE assigned", value=acc["se_assigned"] or "")
         health = c3.selectbox("Health", db.HEALTH_LEVELS, index=db.HEALTH_LEVELS.index(acc["health"]) if acc["health"] in db.HEALTH_LEVELS else 0)
 
-        c4, c5 = st.columns(2)
+        c4, c5, c4b = st.columns(3)
         stage = c4.text_input("Stage", value=acc["stage"] or "")
         arr = c5.text_input("ARR", value=acc["arr"] or "")
+        close_date = c4b.text_input("Close Date (YYYY-MM-DD)", value=acc["close_date"] or "")
 
         c6, c7 = st.columns(2)
         last_call_date = c6.text_input("Last call date (YYYY-MM-DD)", value=acc["last_call_date"] or "")
@@ -312,7 +399,7 @@ def render_account_edit_form(acc, edit_key):
 
         if saved:
             db.update_account(
-                acc["id"], ae_assigned=ae, se_assigned=se, stage=stage, arr=arr, health=health,
+                acc["id"], ae_assigned=ae, se_assigned=se, stage=stage, arr=arr, close_date=close_date, health=health,
                 last_call_date=last_call_date, last_call_summary=last_call_summary,
                 next_call_date=next_call_date, next_call_time=next_call_time, status_summary=status_summary,
                 grafana_url=grafana_url, salesforce_url=salesforce_url, slack_url=slack_url,

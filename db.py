@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     se_assigned TEXT,
     stage TEXT,
     arr TEXT,
+    close_date TEXT,
     health TEXT DEFAULT 'Healthy',
     status_summary TEXT,
     last_call_date TEXT,
@@ -122,6 +123,7 @@ def _migrate(conn):
         "ALTER TABLE accounts ADD COLUMN stage TEXT",
         "ALTER TABLE accounts ADD COLUMN arr TEXT",
         "ALTER TABLE accounts ADD COLUMN salesforce_sync_requested_at TEXT",
+        "ALTER TABLE accounts ADD COLUMN close_date TEXT",
     ]:
         try:
             conn.execute(ddl)
