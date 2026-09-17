@@ -87,26 +87,28 @@ streamlit run app.py
 
 Data is written to `se-account-manager/data/se_accounts.db`.
 
-## Slack + Claude sync
+## Slack sync (via Claude, not a bot token)
 
-Each account has a "Slack Channel ID" field. The "🔄 Sync status from Slack +
-Claude" button on the account page reads that channel's recent messages and
-asks Claude to rewrite the status summary and flag any new deliverables/
-blockers, which get added automatically.
+The app itself holds no Slack or Anthropic credentials — it never talks to
+either API directly. Instead:
 
-Setup:
-1. Create a Slack app (api.slack.com/apps) with bot scopes
-   `channels:history`, `groups:history`, `users:read`; install it to your
-   workspace; invite the bot to each account's channel; copy the bot token
-   (`xoxb-...`).
-2. Get an Anthropic API key (console.anthropic.com).
-3. Set both as env vars wherever the app runs:
-   - **Docker**: `docker run ... -e SLACK_BOT_TOKEN=xoxb-... -e ANTHROPIC_API_KEY=sk-ant-...`
-   - **Kubernetes**: `cp k8s/secret.example.yaml k8s/secret.yaml`, fill in
-     the real values, `kubectl apply -f k8s/secret.yaml`, then restart the
-     deployment.
-4. On each account, paste its Slack channel ID (right-click the channel
-   name in Slack → View channel details → bottom of the panel).
+1. Each account has a "Slack Channel ID" field (paste it from Slack:
+   right-click the channel → View channel details → bottom of the panel).
+2. On the account page, click "🔔 Request Claude Slack sync." This just
+   timestamps a `slack_sync_requested_at` flag on that account — nothing is
+   fetched yet. The Dashboard's "Pending Slack syncs" counter shows how many
+   accounts are waiting.
+3. Next time you're in a Claude Code / chat session in this repo with a
+   Slack connector available, ask it to **"run pending Slack syncs."**
+   Claude will: read `db.list_pending_slack_syncs()`, use its own Slack
+   connector to fetch each account's channel history, write an updated
+   status summary + any new deliverables/blockers itself, and persist the
+   result by running `apply_slack_sync.py <account_id>` (piping in
+   `{"status_summary": ..., "new_deliverables": [...], "new_blockers": [...]}`
+   as JSON), which also clears the pending flag.
+
+This only completes when a Claude session with Slack access actually runs
+the request — the deployed app can't trigger it on its own.
 
 ## Adding a field or feature
 

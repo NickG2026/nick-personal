@@ -32,10 +32,6 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8501
-          envFrom:
-            - secretRef:
-                name: se-account-manager-secrets
-                optional: true
           env:
             - name: SE_DB_PATH
               value: /data/se_accounts.db

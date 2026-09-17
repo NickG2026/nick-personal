@@ -11,12 +11,11 @@ import datetime as dt
 import streamlit as st
 
 import db
-import slack_sync
 
 st.set_page_config(page_title="SE Account Manager", layout="wide", page_icon="🗂️")
 db.init_db()
 
-APP_VERSION = "2026-09-16.2 (Slack+Claude sync, history log)"
+APP_VERSION = "2026-09-17 (Claude-driven Slack sync requests)"
 
 # ---------------------------------------------------------------- styling --
 HEALTH_COLOR = {"Healthy": "#1DDB8C", "Attention": "#5050EE", "At Risk": "#FF4689"}
@@ -87,11 +86,12 @@ def render_dashboard():
     for a in accounts:
         counts_by_health[a["health"]] = counts_by_health.get(a["health"], 0) + 1
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Total accounts", len(accounts))
     c2.metric("Healthy", counts_by_health.get("Healthy", 0))
     c3.metric("Attention", counts_by_health.get("Attention", 0))
     c4.metric("At Risk", counts_by_health.get("At Risk", 0))
+    c5.metric("Pending Slack syncs", len(db.list_pending_slack_syncs()))
 
     st.subheader("Upcoming this week")
     upcoming = []
@@ -228,28 +228,21 @@ def render_account():
     if links:
         st.markdown(" · ".join(f"[{l}]({u})" for l, u in links))
 
-    if st.button("🔄 Sync status from Slack + Claude"):
-        try:
-            with st.spinner("Reading Slack channel and asking Claude..."):
-                result = slack_sync.sync_account_from_slack(acc)
-            db.update_account(acc["id"], status_summary=result["status_summary"])
-            for desc in result.get("new_deliverables", []):
-                db.add_child("deliverables", acc["id"], description=desc, status="Open")
-            for desc in result.get("new_blockers", []):
-                db.add_child("blockers", acc["id"], description=desc, status="Open")
-            db.add_child(
-                "notes", acc["id"], note_date=dt.date.today().isoformat(),
-                summary=f"Synced from Slack via Claude: {result['status_summary'][:300]}",
-            )
-            db.log_history(
-                acc["id"], source="slack_sync", status_summary=result["status_summary"],
-                last_call_date=acc["last_call_date"], last_call_summary=acc["last_call_summary"],
-                next_call_date=acc["next_call_date"], next_call_time=acc["next_call_time"],
-            )
-            st.success("Synced from Slack.")
+    if acc["slack_sync_requested_at"]:
+        st.info(
+            f"Slack sync requested at {acc['slack_sync_requested_at']} — ask Claude, in a chat "
+            "session, to \"run pending Slack syncs\" to complete it."
+        )
+        if st.button("Cancel sync request"):
+            db.clear_slack_sync_request(acc["id"])
             st.rerun()
-        except Exception as e:
-            st.error(f"Sync failed: {e}")
+    elif st.button("🔔 Request Claude Slack sync"):
+        if not acc["slack_channel_id"]:
+            st.error("Set a Slack Channel ID on this account first.")
+        else:
+            db.request_slack_sync(acc["id"])
+            st.success('Requested — ask Claude, in a chat session, to "run pending Slack syncs."')
+            st.rerun()
 
     st.divider()
     tabs = st.tabs(["Deliverables", "Tasks", "Meeting Notes", "Blockers", "Stakeholders", "History"])

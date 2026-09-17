@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     next_call_date TEXT,
     next_call_time TEXT,
     slack_channel_id TEXT,
+    slack_sync_requested_at TEXT,
     grafana_url TEXT,
     salesforce_url TEXT,
     slack_url TEXT,
@@ -105,9 +106,17 @@ CREATE TABLE IF NOT EXISTS stakeholders (
 """
 
 
+def _migrate(conn):
+    try:
+        conn.execute("ALTER TABLE accounts ADD COLUMN slack_sync_requested_at TEXT")
+    except sqlite3.OperationalError:
+        pass  # already there
+
+
 def init_db():
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 # ---------- accounts ----------
@@ -160,6 +169,32 @@ def list_history(account_id):
     with get_conn() as conn:
         return conn.execute(
             "SELECT * FROM account_history WHERE account_id = ? ORDER BY changed_at DESC", (account_id,)
+        ).fetchall()
+
+
+# ---------- Claude-driven Slack sync requests ----------
+# The app has no Slack/Anthropic credentials of its own. "Requesting" a sync
+# just timestamps this column; a Claude session with a Slack connector reads
+# pending requests, does the fetch + summarize itself, and writes the result
+# back via apply_slack_sync.py, which clears the request.
+
+def request_slack_sync(account_id):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE accounts SET slack_sync_requested_at = ? WHERE id = ?",
+            (datetime.now().isoformat(sep=" ", timespec="seconds"), account_id),
+        )
+
+
+def clear_slack_sync_request(account_id):
+    with get_conn() as conn:
+        conn.execute("UPDATE accounts SET slack_sync_requested_at = NULL WHERE id = ?", (account_id,))
+
+
+def list_pending_slack_syncs():
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM accounts WHERE slack_sync_requested_at IS NOT NULL ORDER BY slack_sync_requested_at"
         ).fetchall()
 
 
