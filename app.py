@@ -293,34 +293,37 @@ def render_account():
     else:
         render_account_report(acc)
 
-    render_sync_request(
-        acc, kind="slack", requested_at_field="slack_sync_requested_at",
-        request_fn=db.request_slack_sync, clear_fn=db.clear_slack_sync_request,
-        label="Request Claude Slack sync", verb="run pending Slack syncs",
-        guard=(not acc["slack_channel_id"], "Set a Slack Channel ID on this account first."),
-    )
-    render_sync_request(
-        acc, kind="salesforce", requested_at_field="salesforce_sync_requested_at",
-        request_fn=db.request_salesforce_sync, clear_fn=db.clear_salesforce_sync_request,
-        label="Request Salesforce sync (Stage/ARR)", verb="run pending Salesforce syncs",
-    )
+    a1, a2, a3 = st.columns(3)
+    with a1:
+        render_sync_request(
+            acc, kind="slack", requested_at_field="slack_sync_requested_at",
+            request_fn=db.request_slack_sync, clear_fn=db.clear_slack_sync_request,
+            label="Request Claude Slack sync", verb="run pending Slack syncs",
+            guard=(not acc["slack_channel_id"], "Set a Slack Channel ID on this account first."),
+        )
+    with a2:
+        render_sync_request(
+            acc, kind="salesforce", requested_at_field="salesforce_sync_requested_at",
+            request_fn=db.request_salesforce_sync, clear_fn=db.clear_salesforce_sync_request,
+            label="Request Salesforce sync (Stage/ARR)", verb="run pending Salesforce syncs",
+        )
+    with a3:
+        if st.button("📝 Add update", key=f"open_update_{acc['id']}", use_container_width=True):
+            render_add_update_dialog(acc["id"])
 
     st.divider()
-    st.subheader("Deliverables & Tasks")
-    render_work_items(acc["id"])
-
-    st.divider()
-    st.subheader("Timeline")
-    render_timeline(acc["id"])
-    render_add_update(acc["id"])
-
-    st.divider()
-    tabs = st.tabs(["Blockers", "Stakeholders", "Full History"])
+    tabs = st.tabs(["Main", "Account Stakeholders", "Blockers", "Full History"])
     with tabs[0]:
-        render_child_section("blockers", acc["id"], ["description", "link", "status"], statuses=["Open", "Resolved"])
+        st.subheader("Deliverables & Tasks")
+        render_work_items(acc["id"])
+        st.divider()
+        st.subheader("Timeline")
+        render_timeline(acc["id"])
     with tabs[1]:
         render_child_section("stakeholders", acc["id"], ["name", "role", "email", "notes"])
     with tabs[2]:
+        render_child_section("blockers", acc["id"], ["description", "link", "status"], statuses=["Open", "Resolved"])
+    with tabs[3]:
         history = db.list_history(acc["id"])
         if not history:
             st.caption("No history yet — saved changes will show up here.")
@@ -339,20 +342,18 @@ def render_account_report(acc):
     """Read-only, report-style view of the account header — static until
     'Edit details' is pressed."""
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("AE", acc["ae_assigned"] or "—")
-    c2.metric("SE", acc["se_assigned"] or "—")
-    c3.metric("Stage", acc["stage"] or "—")
-    c4.metric("ARR", acc["arr"] or "—")
-    c5.metric("Health", acc["health"])
+    c1.markdown(f"<span class='se-muted'>AE</span><br>{acc['ae_assigned'] or '—'}", unsafe_allow_html=True)
+    c2.markdown(f"<span class='se-muted'>SE</span><br>{acc['se_assigned'] or '—'}", unsafe_allow_html=True)
+    c3.markdown(f"<span class='se-muted'>Stage</span><br>{acc['stage'] or '—'}", unsafe_allow_html=True)
+    c4.markdown(f"<span class='se-muted'>ARR</span><br>{acc['arr'] or '—'}", unsafe_allow_html=True)
+    dot = HEALTH_COLOR.get(acc["health"], "#8180AC")
+    c5.markdown(
+        f"<span class='se-muted'>Health</span><br>"
+        f"<span class='se-dot' style='background:{dot}'></span>{acc['health']}",
+        unsafe_allow_html=True,
+    )
     if acc["close_date"]:
         st.caption(f"Close date: {acc['close_date']} ({quarter_label(acc['close_date'])})")
-
-    c6, c7 = st.columns(2)
-    with c6:
-        st.markdown(f"**Last call** — {acc['last_call_date'] or '—'}")
-        st.caption(acc["last_call_summary"] or "—")
-    with c7:
-        st.markdown(f"**Next call** — {acc['next_call_date'] or '—'} {acc['next_call_time'] or ''}")
 
     st.markdown("**Where we stand today**")
     st.write(acc["status_summary"] or "—")
@@ -361,7 +362,9 @@ def render_account_report(acc):
     if links:
         st.markdown(" · ".join(f"[{l}]({u})" for l, u in links))
     if acc["slack_channel_id"]:
-        st.caption(f"Slack channel ID: {acc['slack_channel_id']}")
+        sc1, sc2 = st.columns([4, 1])
+        sc1.caption(f"Slack channel ID: {acc['slack_channel_id']}")
+        sc2.link_button("💬 Open in Slack", f"https://slack.com/app_redirect?channel={acc['slack_channel_id']}")
 
 
 def render_account_edit_form(acc, edit_key):
@@ -375,14 +378,6 @@ def render_account_edit_form(acc, edit_key):
         stage = c4.text_input("Stage", value=acc["stage"] or "")
         arr = c5.text_input("ARR", value=acc["arr"] or "")
         close_date = c4b.text_input("Close Date (YYYY-MM-DD)", value=acc["close_date"] or "")
-
-        c6, c7 = st.columns(2)
-        last_call_date = c6.text_input("Last call date (YYYY-MM-DD)", value=acc["last_call_date"] or "")
-        last_call_summary = c7.text_area("Last call summary", value=acc["last_call_summary"] or "", height=80)
-
-        c8, c9 = st.columns(2)
-        next_call_date = c8.text_input("Next call date (YYYY-MM-DD)", value=acc["next_call_date"] or "")
-        next_call_time = c9.text_input("Next call time", value=acc["next_call_time"] or "")
 
         status_summary = st.text_area("Where we stand today (update daily)", value=acc["status_summary"] or "", height=100)
 
@@ -400,14 +395,14 @@ def render_account_edit_form(acc, edit_key):
         if saved:
             db.update_account(
                 acc["id"], ae_assigned=ae, se_assigned=se, stage=stage, arr=arr, close_date=close_date, health=health,
-                last_call_date=last_call_date, last_call_summary=last_call_summary,
-                next_call_date=next_call_date, next_call_time=next_call_time, status_summary=status_summary,
+                status_summary=status_summary,
                 grafana_url=grafana_url, salesforce_url=salesforce_url, slack_url=slack_url,
                 slack_channel_id=slack_channel_id,
             )
             db.log_history(
-                acc["id"], source="manual", status_summary=status_summary, last_call_date=last_call_date,
-                last_call_summary=last_call_summary, next_call_date=next_call_date, next_call_time=next_call_time,
+                acc["id"], source="manual", status_summary=status_summary,
+                last_call_date=acc["last_call_date"], last_call_summary=acc["last_call_summary"],
+                next_call_date=acc["next_call_date"], next_call_time=acc["next_call_time"],
             )
             st.session_state[edit_key] = False
             st.success("Saved.")
@@ -498,15 +493,14 @@ def render_timeline(account_id):
             st.divider()
 
 
-def render_add_update(account_id):
-    with st.expander("+ Add update"):
-        with st.form(f"add_update_{account_id}", clear_on_submit=True):
-            note_date = st.text_input("Date (YYYY-MM-DD)", value=dt.date.today().isoformat(), key=f"update_date_{account_id}")
-            summary = st.text_area("Update", key=f"update_text_{account_id}")
-            if st.form_submit_button("Add update"):
-                if summary.strip():
-                    db.add_child("notes", account_id, note_date=note_date.strip(), summary=summary.strip())
-                    st.rerun()
+@st.dialog("Add update")
+def render_add_update_dialog(account_id):
+    note_date = st.text_input("Date (YYYY-MM-DD)", value=dt.date.today().isoformat(), key=f"update_date_{account_id}")
+    summary = st.text_area("Update", key=f"update_text_{account_id}")
+    if st.button("Save", key=f"save_update_{account_id}"):
+        if summary.strip():
+            db.add_child("notes", account_id, note_date=note_date.strip(), summary=summary.strip())
+            st.rerun()
 
 
 def render_child_section(table, account_id, fields, statuses=None):
