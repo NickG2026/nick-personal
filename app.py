@@ -11,7 +11,7 @@ import re
 
 import pandas as pd
 import streamlit as st
-from st_aggrid import AgGrid, GridOptionsBuilder
+from st_aggrid import AgGrid, GridOptionsBuilder, StAggridTheme
 
 import db
 
@@ -170,8 +170,8 @@ def render_dashboard():
         st.success('Requested — ask Claude to "import my Salesforce accounts."')
         st.rerun()
 
-    render_pipeline_table(accounts)
     render_calendar_card()
+    render_pipeline_table(accounts)
 
     st.subheader("Upcoming this week")
     upcoming = []
@@ -217,18 +217,36 @@ def render_pipeline_table(accounts):
         df = pd.DataFrame(rows)
 
         gb = GridOptionsBuilder.from_dataframe(df)
-        gb.configure_default_column(filter=True, sortable=True, resizable=True, floatingFilter=True)
+        gb.configure_default_column(
+            filter=True, sortable=True, resizable=True,
+            filterParams={"buttons": ["apply", "reset"], "closeOnApply": True},
+        )
         gb.configure_column("ARR", type=["numericColumn"], valueFormatter="'$' + value.toLocaleString()")
+
+        grid_theme = StAggridTheme(base="alpine").withParams(
+            backgroundColor="#100A2C",
+            foregroundColor="#F4F4FF",
+            headerBackgroundColor="#1B1A6A",
+            headerTextColor="#F4F4FF",
+            oddRowBackgroundColor="#160F3D",
+            rowHoverColor="#241660",
+            selectedRowBackgroundColor="#2A1B75",
+            accentColor="#5050EE",
+            borderColor="#1B1A6A",
+            fontSize=15,
+            headerFontSize=15,
+        )
+
         AgGrid(
             df, gridOptions=gb.build(), height=380, fit_columns_on_grid_load=True,
-            theme="streamlit", allow_unsafe_jscode=True,
+            theme=grid_theme, allow_unsafe_jscode=True,
         )
 
 
 def render_calendar_card():
     with st.container(border=True):
         h1, h2 = st.columns([5, 1.6])
-        h1.subheader("This Week's Customer Meetings")
+        h1.subheader("Customer Meetings — Next 4 Weeks")
 
         pending = db.get_calendar_sync_request()
         if pending:
@@ -241,26 +259,33 @@ def render_calendar_card():
             st.success('Requested — ask Claude to "sync my calendar."')
             st.rerun()
 
-        events = db.list_calendar_events_this_week()
-        if not events:
-            st.caption("No customer meetings synced for this week yet.")
-            return
-
-        by_day = {}
+        events = db.list_calendar_events_four_weeks()
+        by_date = {}
         for e in events:
-            by_day.setdefault(e["start_time"][:10], []).append(e)
+            by_date.setdefault(e["start_time"][:10], []).append(e)
 
-        cols = st.columns(len(by_day))
-        for col, day in zip(cols, sorted(by_day.keys())):
-            with col:
-                st.markdown(f"**{dt.date.fromisoformat(day).strftime('%a %m/%d')}**")
-                for e in sorted(by_day[day], key=lambda x: x["start_time"]):
-                    tag = f" · {e['account_name']}" if e["account_name"] else ""
-                    text = f"{e['start_time'][11:16]} — {e['title']}{tag}"
-                    if e["link"]:
-                        st.markdown(f"<a href='{e['link']}' style='font-size:0.85rem'>{text}</a>", unsafe_allow_html=True)
-                    else:
-                        st.caption(text)
+        monday = dt.date.today() - dt.timedelta(days=dt.date.today().weekday())
+        weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+
+        for week in range(4):
+            week_monday = monday + dt.timedelta(days=7 * week)
+            cols = st.columns(5)
+            for i, col in enumerate(cols):
+                day = week_monday + dt.timedelta(days=i)
+                with col:
+                    st.markdown(f"**{weekday_names[i]} {day.strftime('%m/%d')}**")
+                    day_events = sorted(by_date.get(day.isoformat(), []), key=lambda x: x["start_time"])
+                    if not day_events:
+                        st.caption("—")
+                    for e in day_events:
+                        tag = f" · {e['account_name']}" if e["account_name"] else ""
+                        text = f"{e['start_time'][11:16]} — {e['title']}{tag}"
+                        if e["link"]:
+                            st.markdown(f"<a href='{e['link']}' style='font-size:0.8rem'>{text}</a>", unsafe_allow_html=True)
+                        else:
+                            st.caption(text)
+            if week < 3:
+                st.divider()
 
 
 # ------------------------------------------------------------- add account --

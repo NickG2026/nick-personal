@@ -319,20 +319,27 @@ def delete_child(table, row_id):
         conn.execute(f"DELETE FROM {table} WHERE id = ?", (row_id,))
 
 
-# ---------- Claude-driven Google Calendar sync (customer meetings this week) ----------
+# ---------- Claude-driven Google Calendar sync (customer meetings, 4-week view) ----------
 # Same pattern as the Salesforce import: the app has no Google credentials of
 # its own. A Dashboard button flags the request; a Claude session with a
-# Calendar connector reads this week's events itself and writes results back
-# via apply_calendar_sync.py, which replaces this week's rows and clears it.
+# Calendar connector reads the next 4 weeks of events itself and writes
+# results back via apply_calendar_sync.py, which replaces the whole 4-week
+# window's rows and clears the request.
 
 _CAL_SYNC_KEY = "calendar_sync_requested_at"
 
 
-def _week_bounds():
+def _week_start():
     today = datetime.now().date()
-    monday = today - timedelta(days=today.weekday())
-    sunday = monday + timedelta(days=6)
-    return monday.isoformat(), sunday.isoformat()
+    return today - timedelta(days=today.weekday())
+
+
+def _list_events_between(start_date, end_date):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM calendar_events WHERE substr(start_time, 1, 10) BETWEEN ? AND ? ORDER BY start_time",
+            (start_date.isoformat(), end_date.isoformat()),
+        ).fetchall()
 
 
 def request_calendar_sync():
@@ -355,12 +362,12 @@ def get_calendar_sync_request():
         return row["value"] if row else None
 
 
-def clear_calendar_events_this_week():
-    monday, sunday = _week_bounds()
+def clear_calendar_events_four_weeks():
+    monday = _week_start()
     with get_conn() as conn:
         conn.execute(
             "DELETE FROM calendar_events WHERE substr(start_time, 1, 10) BETWEEN ? AND ?",
-            (monday, sunday),
+            (monday.isoformat(), (monday + timedelta(days=27)).isoformat()),
         )
 
 
@@ -374,12 +381,13 @@ def add_calendar_event(title, start_time, end_time=None, account_name=None, acco
 
 
 def list_calendar_events_this_week():
-    monday, sunday = _week_bounds()
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT * FROM calendar_events WHERE substr(start_time, 1, 10) BETWEEN ? AND ? ORDER BY start_time",
-            (monday, sunday),
-        ).fetchall()
+    monday = _week_start()
+    return _list_events_between(monday, monday + timedelta(days=6))
+
+
+def list_calendar_events_four_weeks():
+    monday = _week_start()
+    return _list_events_between(monday, monday + timedelta(days=27))
 
 
 # ---------- rollup counts for the dashboard ----------
