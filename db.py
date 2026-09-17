@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     ae_assigned TEXT,
+    se_assigned TEXT,
+    stage TEXT,
+    arr TEXT,
     health TEXT DEFAULT 'Healthy',
     status_summary TEXT,
     last_call_date TEXT,
@@ -40,6 +43,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     next_call_time TEXT,
     slack_channel_id TEXT,
     slack_sync_requested_at TEXT,
+    salesforce_sync_requested_at TEXT,
     grafana_url TEXT,
     salesforce_url TEXT,
     slack_url TEXT,
@@ -107,10 +111,17 @@ CREATE TABLE IF NOT EXISTS stakeholders (
 
 
 def _migrate(conn):
-    try:
-        conn.execute("ALTER TABLE accounts ADD COLUMN slack_sync_requested_at TEXT")
-    except sqlite3.OperationalError:
-        pass  # already there
+    for ddl in [
+        "ALTER TABLE accounts ADD COLUMN slack_sync_requested_at TEXT",
+        "ALTER TABLE accounts ADD COLUMN se_assigned TEXT",
+        "ALTER TABLE accounts ADD COLUMN stage TEXT",
+        "ALTER TABLE accounts ADD COLUMN arr TEXT",
+        "ALTER TABLE accounts ADD COLUMN salesforce_sync_requested_at TEXT",
+    ]:
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError:
+            pass  # already there
 
 
 def init_db():
@@ -196,6 +207,35 @@ def list_pending_slack_syncs():
         return conn.execute(
             "SELECT * FROM accounts WHERE slack_sync_requested_at IS NOT NULL ORDER BY slack_sync_requested_at"
         ).fetchall()
+
+
+# ---------- Claude-driven Salesforce sync requests (same idea, for Stage/ARR) ----------
+
+def request_salesforce_sync(account_id):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE accounts SET salesforce_sync_requested_at = ? WHERE id = ?",
+            (datetime.now().isoformat(sep=" ", timespec="seconds"), account_id),
+        )
+
+
+def clear_salesforce_sync_request(account_id):
+    with get_conn() as conn:
+        conn.execute("UPDATE accounts SET salesforce_sync_requested_at = NULL WHERE id = ?", (account_id,))
+
+
+def list_pending_salesforce_syncs():
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM accounts WHERE salesforce_sync_requested_at IS NOT NULL ORDER BY salesforce_sync_requested_at"
+        ).fetchall()
+
+
+def find_account_by_name(name):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM accounts WHERE name = ? COLLATE NOCASE", (name.strip(),)
+        ).fetchone()
 
 
 # ---------- generic child-table helpers (deliverables, tasks, notes, blockers, stakeholders) ----------

@@ -179,85 +179,53 @@ def render_account():
         st.warning("Account not found.")
         return
 
-    top = st.columns([6, 1])
+    edit_key = f"editing_{acc['id']}"
+    st.session_state.setdefault(edit_key, False)
+
+    top = st.columns([6, 1.4, 1])
     top[0].title(acc["name"])
-    if top[1].button("Delete account"):
+    if not st.session_state[edit_key]:
+        if top[1].button("✏️ Edit details"):
+            st.session_state[edit_key] = True
+            st.rerun()
+    if top[2].button("Delete account"):
         db.delete_account(acc["id"])
         goto("Dashboard")
         st.rerun()
 
-    with st.form("account_meta_form"):
-        c1, c2, c3 = st.columns(3)
-        ae = c1.text_input("AE assigned", value=acc["ae_assigned"] or "")
-        health = c2.selectbox("Health", db.HEALTH_LEVELS, index=db.HEALTH_LEVELS.index(acc["health"]) if acc["health"] in db.HEALTH_LEVELS else 0)
-        c3.write("")
+    if st.session_state[edit_key]:
+        render_account_edit_form(acc, edit_key)
+    else:
+        render_account_report(acc)
 
-        c4, c5 = st.columns(2)
-        last_call_date = c4.text_input("Last call date (YYYY-MM-DD)", value=acc["last_call_date"] or "")
-        last_call_summary = c5.text_area("Last call summary", value=acc["last_call_summary"] or "", height=80)
-
-        c6, c7 = st.columns(2)
-        next_call_date = c6.text_input("Next call date (YYYY-MM-DD)", value=acc["next_call_date"] or "")
-        next_call_time = c7.text_input("Next call time", value=acc["next_call_time"] or "")
-
-        status_summary = st.text_area("Where we stand today (update daily)", value=acc["status_summary"] or "", height=100)
-
-        st.caption("Quick links")
-        l1, l2, l3 = st.columns(3)
-        grafana_url = l1.text_input("Grafana URL", value=acc["grafana_url"] or "")
-        salesforce_url = l2.text_input("Salesforce URL", value=acc["salesforce_url"] or "")
-        slack_url = l3.text_input("Slack URL", value=acc["slack_url"] or "")
-        slack_channel_id = st.text_input("Slack Channel ID (for Claude sync, e.g. C0123ABCDEF)", value=acc["slack_channel_id"] or "")
-
-        if st.form_submit_button("Save"):
-            db.update_account(
-                acc["id"], ae_assigned=ae, health=health, last_call_date=last_call_date,
-                last_call_summary=last_call_summary, next_call_date=next_call_date,
-                next_call_time=next_call_time, status_summary=status_summary,
-                grafana_url=grafana_url, salesforce_url=salesforce_url, slack_url=slack_url,
-                slack_channel_id=slack_channel_id,
-            )
-            db.log_history(
-                acc["id"], source="manual", status_summary=status_summary, last_call_date=last_call_date,
-                last_call_summary=last_call_summary, next_call_date=next_call_date, next_call_time=next_call_time,
-            )
-            st.success("Saved.")
-            st.rerun()
-
-    links = [(l, u) for l, u in [("Grafana", acc["grafana_url"]), ("Salesforce", acc["salesforce_url"]), ("Slack", acc["slack_url"])] if u]
-    if links:
-        st.markdown(" · ".join(f"[{l}]({u})" for l, u in links))
-
-    if acc["slack_sync_requested_at"]:
-        st.info(
-            f"Slack sync requested at {acc['slack_sync_requested_at']} — ask Claude, in a chat "
-            "session, to \"run pending Slack syncs\" to complete it."
-        )
-        if st.button("Cancel sync request"):
-            db.clear_slack_sync_request(acc["id"])
-            st.rerun()
-    elif st.button("🔔 Request Claude Slack sync"):
-        if not acc["slack_channel_id"]:
-            st.error("Set a Slack Channel ID on this account first.")
-        else:
-            db.request_slack_sync(acc["id"])
-            st.success('Requested — ask Claude, in a chat session, to "run pending Slack syncs."')
-            st.rerun()
+    render_sync_request(
+        acc, kind="slack", requested_at_field="slack_sync_requested_at",
+        request_fn=db.request_slack_sync, clear_fn=db.clear_slack_sync_request,
+        label="Request Claude Slack sync", verb="run pending Slack syncs",
+        guard=(not acc["slack_channel_id"], "Set a Slack Channel ID on this account first."),
+    )
+    render_sync_request(
+        acc, kind="salesforce", requested_at_field="salesforce_sync_requested_at",
+        request_fn=db.request_salesforce_sync, clear_fn=db.clear_salesforce_sync_request,
+        label="Request Salesforce sync (Stage/ARR)", verb="run pending Salesforce syncs",
+    )
 
     st.divider()
-    tabs = st.tabs(["Deliverables", "Tasks", "Meeting Notes", "Blockers", "Stakeholders", "History"])
+    st.subheader("Deliverables & Tasks")
+    render_work_items(acc["id"])
 
+    st.divider()
+    st.subheader("Timeline")
+    render_timeline(acc["id"])
+    render_add_update(acc["id"])
+
+    st.divider()
+    tabs = st.tabs(["Blockers", "Stakeholders", "Full History"])
     with tabs[0]:
-        render_child_section("deliverables", acc["id"], ["description", "due_date", "status"], statuses=["Open", "Done"])
-    with tabs[1]:
-        render_child_section("tasks", acc["id"], ["description", "due_date", "status"], statuses=["Open", "Done"])
-    with tabs[2]:
-        render_child_section("notes", acc["id"], ["note_date", "summary"])
-    with tabs[3]:
         render_child_section("blockers", acc["id"], ["description", "link", "status"], statuses=["Open", "Resolved"])
-    with tabs[4]:
+    with tabs[1]:
         render_child_section("stakeholders", acc["id"], ["name", "role", "email", "notes"])
-    with tabs[5]:
+    with tabs[2]:
         history = db.list_history(acc["id"])
         if not history:
             st.caption("No history yet — saved changes will show up here.")
@@ -270,6 +238,170 @@ def render_account():
                     f"Next call: {h['next_call_date'] or '—'} {h['next_call_time'] or ''}"
                 )
                 st.divider()
+
+
+def render_account_report(acc):
+    """Read-only, report-style view of the account header — static until
+    'Edit details' is pressed."""
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("AE", acc["ae_assigned"] or "—")
+    c2.metric("SE", acc["se_assigned"] or "—")
+    c3.metric("Stage", acc["stage"] or "—")
+    c4.metric("ARR", acc["arr"] or "—")
+    c5.metric("Health", acc["health"])
+
+    c6, c7 = st.columns(2)
+    with c6:
+        st.markdown(f"**Last call** — {acc['last_call_date'] or '—'}")
+        st.caption(acc["last_call_summary"] or "—")
+    with c7:
+        st.markdown(f"**Next call** — {acc['next_call_date'] or '—'} {acc['next_call_time'] or ''}")
+
+    st.markdown("**Where we stand today**")
+    st.write(acc["status_summary"] or "—")
+
+    links = [(l, u) for l, u in [("Grafana", acc["grafana_url"]), ("Salesforce", acc["salesforce_url"]), ("Slack", acc["slack_url"])] if u]
+    if links:
+        st.markdown(" · ".join(f"[{l}]({u})" for l, u in links))
+    if acc["slack_channel_id"]:
+        st.caption(f"Slack channel ID: {acc['slack_channel_id']}")
+
+
+def render_account_edit_form(acc, edit_key):
+    with st.form("account_meta_form"):
+        c1, c2, c3 = st.columns(3)
+        ae = c1.text_input("AE assigned", value=acc["ae_assigned"] or "")
+        se = c2.text_input("SE assigned", value=acc["se_assigned"] or "")
+        health = c3.selectbox("Health", db.HEALTH_LEVELS, index=db.HEALTH_LEVELS.index(acc["health"]) if acc["health"] in db.HEALTH_LEVELS else 0)
+
+        c4, c5 = st.columns(2)
+        stage = c4.text_input("Stage", value=acc["stage"] or "")
+        arr = c5.text_input("ARR", value=acc["arr"] or "")
+
+        c6, c7 = st.columns(2)
+        last_call_date = c6.text_input("Last call date (YYYY-MM-DD)", value=acc["last_call_date"] or "")
+        last_call_summary = c7.text_area("Last call summary", value=acc["last_call_summary"] or "", height=80)
+
+        c8, c9 = st.columns(2)
+        next_call_date = c8.text_input("Next call date (YYYY-MM-DD)", value=acc["next_call_date"] or "")
+        next_call_time = c9.text_input("Next call time", value=acc["next_call_time"] or "")
+
+        status_summary = st.text_area("Where we stand today (update daily)", value=acc["status_summary"] or "", height=100)
+
+        st.caption("Quick links")
+        l1, l2, l3 = st.columns(3)
+        grafana_url = l1.text_input("Grafana URL", value=acc["grafana_url"] or "")
+        salesforce_url = l2.text_input("Salesforce URL", value=acc["salesforce_url"] or "")
+        slack_url = l3.text_input("Slack URL", value=acc["slack_url"] or "")
+        slack_channel_id = st.text_input("Slack Channel ID (for Claude sync, e.g. C0123ABCDEF)", value=acc["slack_channel_id"] or "")
+
+        save_col, cancel_col = st.columns([1, 1])
+        saved = save_col.form_submit_button("Save")
+        cancelled = cancel_col.form_submit_button("Cancel")
+
+        if saved:
+            db.update_account(
+                acc["id"], ae_assigned=ae, se_assigned=se, stage=stage, arr=arr, health=health,
+                last_call_date=last_call_date, last_call_summary=last_call_summary,
+                next_call_date=next_call_date, next_call_time=next_call_time, status_summary=status_summary,
+                grafana_url=grafana_url, salesforce_url=salesforce_url, slack_url=slack_url,
+                slack_channel_id=slack_channel_id,
+            )
+            db.log_history(
+                acc["id"], source="manual", status_summary=status_summary, last_call_date=last_call_date,
+                last_call_summary=last_call_summary, next_call_date=next_call_date, next_call_time=next_call_time,
+            )
+            st.session_state[edit_key] = False
+            st.success("Saved.")
+            st.rerun()
+        if cancelled:
+            st.session_state[edit_key] = False
+            st.rerun()
+
+
+def render_sync_request(acc, kind, requested_at_field, request_fn, clear_fn, label, verb, guard=None):
+    requested_at = acc[requested_at_field]
+    if requested_at:
+        st.info(f'{kind.capitalize()} sync requested at {requested_at} — ask Claude, in a chat session, to "{verb}" to complete it.')
+        if st.button(f"Cancel {kind} sync request", key=f"cancel_{kind}_{acc['id']}"):
+            clear_fn(acc["id"])
+            st.rerun()
+    elif st.button(f"🔔 {label}", key=f"req_{kind}_{acc['id']}"):
+        if guard and guard[0]:
+            st.error(guard[1])
+        else:
+            request_fn(acc["id"])
+            st.success(f'Requested — ask Claude, in a chat session, to "{verb}."')
+            st.rerun()
+
+
+def render_work_items(account_id):
+    """Deliverables and Tasks merged into one table (Type column), with an
+    inline, immediately-applied status dropdown per row."""
+    deliverables = [("Deliverable", "deliverables", r) for r in db.list_children("deliverables", account_id)]
+    tasks = [("Task", "tasks", r) for r in db.list_children("tasks", account_id)]
+    rows = sorted(deliverables + tasks, key=lambda t: t[2]["due_date"] or "9999-99-99")
+
+    if not rows:
+        st.caption("No deliverables or tasks yet.")
+    else:
+        header = st.columns([1.2, 3.3, 1.3, 1.4, 0.8])
+        for h, label in zip(header, ["Type", "Description", "Due Date", "Status", ""]):
+            h.caption(label)
+        for item_type, table, row in rows:
+            cols = st.columns([1.2, 3.3, 1.3, 1.4, 0.8])
+            cols[0].write(item_type)
+            cols[1].write(row["description"])
+            cols[2].write(row["due_date"] or "—")
+            statuses = ["Open", "Done"]
+            current = row["status"] if row["status"] in statuses else "Open"
+            new_status = cols[3].selectbox(
+                "Status", statuses, index=statuses.index(current),
+                key=f"status_{table}_{row['id']}", label_visibility="collapsed",
+            )
+            if new_status != row["status"]:
+                db.update_child(table, row["id"], status=new_status)
+                st.rerun()
+            if cols[4].button("Delete", key=f"del_{table}_{row['id']}"):
+                db.delete_child(table, row["id"])
+                st.rerun()
+
+    with st.form(f"add_workitem_{account_id}", clear_on_submit=True):
+        st.caption("Add deliverable/task")
+        c1, c2, c3, c4 = st.columns([1.2, 3.3, 1.3, 1.4])
+        item_type = c1.selectbox("Type", ["Deliverable", "Task"], key=f"new_wi_type_{account_id}")
+        description = c2.text_input("Description", key=f"new_wi_desc_{account_id}")
+        due_date = c3.text_input("Due Date", key=f"new_wi_due_{account_id}")
+        status = c4.selectbox("Status", ["Open", "Done"], key=f"new_wi_status_{account_id}")
+        if st.form_submit_button("Add"):
+            if description.strip():
+                table = "deliverables" if item_type == "Deliverable" else "tasks"
+                db.add_child(table, account_id, description=description.strip(), due_date=due_date.strip(), status=status)
+                st.rerun()
+
+
+def render_timeline(account_id):
+    """Most-recent-first log of updates — manual notes and anything Claude
+    added (e.g. a completed Slack/Salesforce sync)."""
+    notes = list(reversed(db.list_children("notes", account_id, order_by="created_at")))
+    if not notes:
+        st.caption("No updates yet.")
+    for n in notes:
+        with st.container():
+            date_suffix = f" ({n['note_date']})" if n["note_date"] else ""
+            st.markdown(f"**{n['created_at']}**{date_suffix}  \n{n['summary']}")
+            st.divider()
+
+
+def render_add_update(account_id):
+    with st.expander("+ Add update"):
+        with st.form(f"add_update_{account_id}", clear_on_submit=True):
+            note_date = st.text_input("Date (YYYY-MM-DD)", value=dt.date.today().isoformat(), key=f"update_date_{account_id}")
+            summary = st.text_area("Update", key=f"update_text_{account_id}")
+            if st.form_submit_button("Add update"):
+                if summary.strip():
+                    db.add_child("notes", account_id, note_date=note_date.strip(), summary=summary.strip())
+                    st.rerun()
 
 
 def render_child_section(table, account_id, fields, statuses=None):

@@ -110,6 +110,36 @@ either API directly. Instead:
 This only completes when a Claude session with Slack access actually runs
 the request — the deployed app can't trigger it on its own.
 
+## Salesforce sync (also via Claude)
+
+Same pattern as Slack, for the Stage and ARR fields shown on the account
+report:
+
+1. On the account page, click "🔔 Request Salesforce sync (Stage/ARR)" —
+   timestamps `salesforce_sync_requested_at` on that account.
+2. Ask Claude to **"run pending Salesforce syncs."** It reads
+   `db.list_pending_salesforce_syncs()`, looks up each account/opportunity
+   via its own Salesforce connector, and persists the result by running
+   `apply_salesforce_sync.py <account_id>` (piping in `{"stage": ...,
+   "arr": ...}` as JSON), which also clears the pending flag and drops a
+   Timeline note.
+
+### Importing all your Salesforce accounts
+
+Ask Claude to **"import my Salesforce accounts."** It queries Salesforce
+for opportunities/accounts where you're listed as SE, and for each one
+pipes a JSON record into `import_salesforce_accounts.py`:
+
+```bash
+echo '[{"name": "Acme Corp", "ae_assigned": "...", "se_assigned": "...",
+        "stage": "POC", "arr": "$300,000", "salesforce_url": "..."}]' \
+  | python import_salesforce_accounts.py
+```
+
+It matches existing accounts by name (case-insensitive) and updates them,
+or creates a new account for anything not already tracked — either way it
+leaves a Timeline note recording the import.
+
 ## Adding a field or feature
 
 - New column on an account: add it to `SCHEMA` in `db.py` (the `accounts`
