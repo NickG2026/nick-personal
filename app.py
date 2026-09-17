@@ -293,37 +293,49 @@ def render_account():
     else:
         render_account_report(acc)
 
-    a1, a2, a3 = st.columns(3)
+    slack_link = (
+        f"https://slack.com/app_redirect?channel={acc['slack_channel_id']}" if acc["slack_channel_id"] else acc["slack_url"]
+    )
+    a1, a2, a3, a4 = st.columns(4)
     with a1:
+        if acc["salesforce_url"]:
+            st.link_button("🔗 Open in Salesforce", acc["salesforce_url"])
+    with a2:
+        if slack_link:
+            st.link_button("💬 Open in Slack", slack_link)
+    with a3:
         render_sync_request(
             acc, kind="slack", requested_at_field="slack_sync_requested_at",
             request_fn=db.request_slack_sync, clear_fn=db.clear_slack_sync_request,
             label="Request Claude Slack sync", verb="run pending Slack syncs",
             guard=(not acc["slack_channel_id"], "Set a Slack Channel ID on this account first."),
         )
-    with a2:
+    with a4:
         render_sync_request(
             acc, kind="salesforce", requested_at_field="salesforce_sync_requested_at",
             request_fn=db.request_salesforce_sync, clear_fn=db.clear_salesforce_sync_request,
             label="Request Salesforce sync (Stage/ARR)", verb="run pending Salesforce syncs",
         )
-    with a3:
-        if st.button("📝 Add update", key=f"open_update_{acc['id']}", use_container_width=True):
-            render_add_update_dialog(acc["id"])
 
     st.divider()
-    tabs = st.tabs(["Main", "Account Stakeholders", "Blockers", "Full History"])
+    tabs = st.tabs(["Deliverables & Tasks", "Timeline", "Account Stakeholders", "Blockers", "Full History"])
     with tabs[0]:
-        st.subheader("Deliverables & Tasks")
+        h1, h2 = st.columns([5, 1.6])
+        h1.subheader("Deliverables & Tasks")
+        if h2.button("➕ Add Deliverable/Task", key=f"open_add_workitem_{acc['id']}"):
+            render_add_workitem_dialog(acc["id"])
         render_work_items(acc["id"])
-        st.divider()
-        st.subheader("Timeline")
-        render_timeline(acc["id"])
     with tabs[1]:
-        render_child_section("stakeholders", acc["id"], ["name", "role", "email", "notes"])
+        h1, h2 = st.columns([5, 1.6])
+        h1.subheader("Timeline")
+        if h2.button("📝 Add update", key=f"open_update_{acc['id']}"):
+            render_add_update_dialog(acc["id"])
+        render_timeline(acc["id"])
     with tabs[2]:
-        render_child_section("blockers", acc["id"], ["description", "link", "status"], statuses=["Open", "Resolved"])
+        render_child_section("stakeholders", acc["id"], ["name", "role", "email", "notes"])
     with tabs[3]:
+        render_child_section("blockers", acc["id"], ["description", "link", "status"], statuses=["Open", "Resolved"])
+    with tabs[4]:
         history = db.list_history(acc["id"])
         if not history:
             st.caption("No history yet — saved changes will show up here.")
@@ -341,7 +353,7 @@ def render_account():
 def render_account_report(acc):
     """Read-only, report-style view of the account header — static until
     'Edit details' is pressed."""
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6, gap="small")
     c1.markdown(f"<span class='se-muted'>AE</span><br>{acc['ae_assigned'] or '—'}", unsafe_allow_html=True)
     c2.markdown(f"<span class='se-muted'>SE</span><br>{acc['se_assigned'] or '—'}", unsafe_allow_html=True)
     c3.markdown(f"<span class='se-muted'>Stage</span><br>{acc['stage'] or '—'}", unsafe_allow_html=True)
@@ -352,19 +364,13 @@ def render_account_report(acc):
         f"<span class='se-dot' style='background:{dot}'></span>{acc['health']}",
         unsafe_allow_html=True,
     )
-    if acc["close_date"]:
-        st.caption(f"Close date: {acc['close_date']} ({quarter_label(acc['close_date'])})")
+    c6.markdown(f"<span class='se-muted'>Close Date</span><br>{acc['close_date'] or '—'}", unsafe_allow_html=True)
 
     st.markdown("**Where we stand today**")
     st.write(acc["status_summary"] or "—")
 
-    links = [(l, u) for l, u in [("Grafana", acc["grafana_url"]), ("Salesforce", acc["salesforce_url"]), ("Slack", acc["slack_url"])] if u]
-    if links:
-        st.markdown(" · ".join(f"[{l}]({u})" for l, u in links))
-    if acc["slack_channel_id"]:
-        sc1, sc2 = st.columns([4, 1])
-        sc1.caption(f"Slack channel ID: {acc['slack_channel_id']}")
-        sc2.link_button("💬 Open in Slack", f"https://slack.com/app_redirect?channel={acc['slack_channel_id']}")
+    if acc["grafana_url"]:
+        st.markdown(f"[Grafana]({acc['grafana_url']})")
 
 
 def render_account_edit_form(acc, edit_key):
@@ -466,18 +472,18 @@ def render_work_items(account_id):
                 db.delete_child(table, row["id"])
                 st.rerun()
 
-    with st.form(f"add_workitem_{account_id}", clear_on_submit=True):
-        st.caption("Add deliverable/task")
-        c1, c2, c3, c4 = st.columns([1.2, 3.3, 1.3, 1.4])
-        item_type = c1.selectbox("Type", ["Deliverable", "Task"], key=f"new_wi_type_{account_id}")
-        description = c2.text_input("Description", key=f"new_wi_desc_{account_id}")
-        due_date = c3.text_input("Due Date", key=f"new_wi_due_{account_id}")
-        status = c4.selectbox("Status", ["Open", "Done"], key=f"new_wi_status_{account_id}")
-        if st.form_submit_button("Add"):
-            if description.strip():
-                table = "deliverables" if item_type == "Deliverable" else "tasks"
-                db.add_child(table, account_id, description=description.strip(), due_date=due_date.strip(), status=status)
-                st.rerun()
+
+@st.dialog("Add Deliverable/Task")
+def render_add_workitem_dialog(account_id):
+    item_type = st.selectbox("Type", ["Deliverable", "Task"], key=f"dialog_wi_type_{account_id}")
+    description = st.text_input("Description", key=f"dialog_wi_desc_{account_id}")
+    due_date = st.text_input("Due Date (YYYY-MM-DD)", key=f"dialog_wi_due_{account_id}")
+    status = st.selectbox("Status", ["Open", "Done"], key=f"dialog_wi_status_{account_id}")
+    if st.button("Save", key=f"dialog_wi_save_{account_id}"):
+        if description.strip():
+            table = "deliverables" if item_type == "Deliverable" else "tasks"
+            db.add_child(table, account_id, description=description.strip(), due_date=due_date.strip(), status=status)
+            st.rerun()
 
 
 def render_timeline(account_id):
