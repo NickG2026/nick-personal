@@ -144,6 +144,16 @@ def parse_arr(value):
         return 0.0
 
 
+JIRA_TICKET_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9}-\d+)\b")
+
+
+def _linkify_jira(text):
+    """Turn bare Jira ticket keys like 'CUST-4031' into clickable links."""
+    if not text:
+        return text
+    return JIRA_TICKET_RE.sub(r"[\1](https://scaleopscom.atlassian.net/browse/\1)", text)
+
+
 # ---------------------------------------------------------------- dashboard --
 def render_dashboard():
     accounts = db.list_accounts()
@@ -447,9 +457,7 @@ def render_account():
     else:
         render_account_report(acc)
 
-    slack_link = (
-        f"slack://channel?team={SLACK_TEAM_ID}&id={acc['slack_channel_id']}" if acc["slack_channel_id"] else acc["slack_url"]
-    )
+    slack_link = f"slack://channel?team={SLACK_TEAM_ID}&id={acc['slack_channel_id']}" if acc["slack_channel_id"] else None
     a1, a2, a3, a4 = st.columns(4)
     with a1:
         if acc["salesforce_url"]:
@@ -470,6 +478,8 @@ def render_account():
             request_fn=db.request_salesforce_sync, clear_fn=db.clear_salesforce_sync_request,
             label="Request Salesforce sync (Stage/ARR)", verb="run pending Salesforce syncs",
         )
+
+    render_clusters_card(acc["id"])
 
     st.divider()
     tabs = st.tabs(["Deliverables & Tasks", "Timeline", "Account Stakeholders", "Blockers", "Full History"])
@@ -521,7 +531,7 @@ def render_account_report(acc):
     c6.markdown(f"<span class='se-muted'>Close Date</span><br>{acc['close_date'] or '—'}", unsafe_allow_html=True)
 
     st.markdown("**Where we stand today**")
-    st.write(acc["status_summary"] or "—")
+    st.markdown(_linkify_jira(acc["status_summary"]) or "—")
 
     if acc["grafana_url"]:
         st.markdown(f"[Grafana]({acc['grafana_url']})")
@@ -542,10 +552,9 @@ def render_account_edit_form(acc, edit_key):
         status_summary = st.text_area("Where we stand today (update daily)", value=acc["status_summary"] or "", height=100)
 
         st.caption("Quick links")
-        l1, l2, l3 = st.columns(3)
+        l1, l2 = st.columns(2)
         grafana_url = l1.text_input("Grafana URL", value=acc["grafana_url"] or "")
         salesforce_url = l2.text_input("Salesforce URL", value=acc["salesforce_url"] or "")
-        slack_url = l3.text_input("Slack URL", value=acc["slack_url"] or "")
         slack_channel_id = st.text_input("Slack Channel ID (for Claude sync, e.g. C0123ABCDEF)", value=acc["slack_channel_id"] or "")
 
         save_col, cancel_col = st.columns([1, 1])
@@ -556,7 +565,7 @@ def render_account_edit_form(acc, edit_key):
             db.update_account(
                 acc["id"], ae_assigned=ae, se_assigned=se, stage=stage, arr=arr, close_date=close_date, health=health,
                 status_summary=status_summary,
-                grafana_url=grafana_url, salesforce_url=salesforce_url, slack_url=slack_url,
+                grafana_url=grafana_url, salesforce_url=salesforce_url,
                 slack_channel_id=slack_channel_id,
             )
             db.log_history(
@@ -660,6 +669,92 @@ def render_add_update_dialog(account_id):
     if st.button("Save", key=f"save_update_{account_id}"):
         if summary.strip():
             db.add_child("notes", account_id, note_date=note_date.strip(), summary=summary.strip())
+            st.rerun()
+
+
+def render_clusters_card(account_id):
+    with st.container(border=True):
+        h1, h2 = st.columns([5, 1.6])
+        h1.subheader("Clusters")
+        if h2.button("➕ Add", key=f"open_add_cluster_{account_id}"):
+            render_add_cluster_dialog(account_id)
+
+        rows = db.list_children("clusters", account_id)
+        if not rows:
+            st.caption("No clusters yet.")
+            return
+
+        view_widths = [2.4, 1.6, 1.0, 0.4]
+        edit_widths = [1.6, 2.0, 1.4, 1.0, 0.4, 0.4]
+
+        header = st.columns(view_widths)
+        for h, label in zip(header, ["Cluster", "Environment", "Reviewed", ""]):
+            h.caption(label)
+
+        for row in rows:
+            edit_key = f"editing_cluster_{row['id']}"
+            st.session_state.setdefault(edit_key, False)
+
+            if st.session_state[edit_key]:
+                cols = st.columns(edit_widths)
+                name = cols[0].text_input(
+                    "Cluster", value=row["name"], key=f"edit_cluster_name_{row['id']}",
+                    label_visibility="collapsed", placeholder="Cluster name",
+                )
+                link = cols[1].text_input(
+                    "Link", value=row["link"] or "", key=f"edit_cluster_link_{row['id']}",
+                    label_visibility="collapsed", placeholder="https://...",
+                )
+                env = cols[2].text_input(
+                    "Environment", value=row["environment"] or "", key=f"edit_cluster_env_{row['id']}",
+                    label_visibility="collapsed",
+                )
+                reviewed = cols[3].checkbox(
+                    "Reviewed", value=bool(row["reviewed"]), key=f"edit_cluster_rev_{row['id']}",
+                    label_visibility="collapsed",
+                )
+                if cols[4].button("✏️", key=f"save_cluster_{row['id']}", help="Save"):
+                    db.update_child(
+                        "clusters", row["id"], name=name.strip(), link=link.strip(),
+                        environment=env.strip(), reviewed=int(reviewed),
+                    )
+                    st.session_state[edit_key] = False
+                    st.rerun()
+                if cols[5].button("❌", key=f"delete_cluster_{row['id']}", help="Delete"):
+                    db.delete_child("clusters", row["id"])
+                    st.session_state[edit_key] = False
+                    st.rerun()
+            else:
+                cols = st.columns(view_widths)
+                if row["link"]:
+                    cols[0].markdown(f"[{row['name']}]({row['link']})")
+                else:
+                    cols[0].write(row["name"])
+                cols[1].write(row["environment"] or "—")
+                reviewed = cols[2].checkbox(
+                    "Reviewed", value=bool(row["reviewed"]), key=f"view_cluster_rev_{row['id']}",
+                    label_visibility="collapsed",
+                )
+                if reviewed != bool(row["reviewed"]):
+                    db.update_child("clusters", row["id"], reviewed=int(reviewed))
+                    st.rerun()
+                if cols[3].button("✏️", key=f"edit_cluster_{row['id']}", help="Edit"):
+                    st.session_state[edit_key] = True
+                    st.rerun()
+
+
+@st.dialog("Add Cluster")
+def render_add_cluster_dialog(account_id):
+    name = st.text_input("Cluster Name", key=f"dialog_cluster_name_{account_id}")
+    link = st.text_input("Cluster Link (optional)", key=f"dialog_cluster_link_{account_id}", placeholder="https://...")
+    environment = st.text_input("Environment", key=f"dialog_cluster_env_{account_id}")
+    reviewed = st.checkbox("Reviewed", key=f"dialog_cluster_rev_{account_id}")
+    if st.button("Save", key=f"dialog_cluster_save_{account_id}"):
+        if name.strip():
+            db.add_child(
+                "clusters", account_id, name=name.strip(), link=link.strip(),
+                environment=environment.strip(), reviewed=int(reviewed),
+            )
             st.rerun()
 
 
