@@ -23,6 +23,7 @@ APP_VERSION = "2026-09-17 (Claude-driven Slack sync requests)"
 
 # ---------------------------------------------------------------- styling --
 HEALTH_COLOR = {"Healthy": "#1DDB8C", "Attention": "#5050EE", "At Risk": "#FF4689"}
+SLACK_TEAM_ID = "T03B86MMFAR"  # ScaleOps workspace — used for slack:// deep links to the desktop app
 
 st.markdown(
     """
@@ -447,7 +448,7 @@ def render_account():
         render_account_report(acc)
 
     slack_link = (
-        f"https://slack.com/app_redirect?channel={acc['slack_channel_id']}" if acc["slack_channel_id"] else acc["slack_url"]
+        f"slack://channel?team={SLACK_TEAM_ID}&id={acc['slack_channel_id']}" if acc["slack_channel_id"] else acc["slack_url"]
     )
     a1, a2, a3, a4 = st.columns(4)
     with a1:
