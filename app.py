@@ -486,7 +486,7 @@ def render_account():
             render_add_update_dialog(acc["id"])
         render_timeline(acc["id"])
     with tabs[2]:
-        render_child_section("stakeholders", acc["id"], ["name", "role", "email", "notes"])
+        render_stakeholders_section(acc["id"])
     with tabs[3]:
         render_child_section("blockers", acc["id"], ["description", "link", "status"], statuses=["Open", "Resolved"])
     with tabs[4]:
@@ -660,6 +660,59 @@ def render_add_update_dialog(account_id):
     if st.button("Save", key=f"save_update_{account_id}"):
         if summary.strip():
             db.add_child("notes", account_id, note_date=note_date.strip(), summary=summary.strip())
+            st.rerun()
+
+
+def render_stakeholders_section(account_id):
+    h1, h2 = st.columns([5, 1.6])
+    h1.subheader("Account Stakeholders")
+    if h2.button("➕ Add", key=f"open_add_stakeholder_{account_id}"):
+        render_add_stakeholder_dialog(account_id)
+
+    rows = db.list_children("stakeholders", account_id)
+    if not rows:
+        st.caption("No stakeholders yet.")
+        return
+
+    col_widths = [1.3, 2.8, 2.2, 0.4, 0.4]
+    header = st.columns(col_widths)
+    for h, label in zip(header, ["Name", "Role", "Email", "", ""]):
+        h.caption(label)
+
+    for row in rows:
+        edit_key = f"editing_stakeholder_{row['id']}"
+        st.session_state.setdefault(edit_key, False)
+        cols = st.columns(col_widths)
+
+        if st.session_state[edit_key]:
+            name = cols[0].text_input("Name", value=row["name"], key=f"edit_name_{row['id']}", label_visibility="collapsed")
+            role = cols[1].text_input("Role", value=row["role"] or "", key=f"edit_role_{row['id']}", label_visibility="collapsed")
+            email = cols[2].text_input("Email", value=row["email"] or "", key=f"edit_email_{row['id']}", label_visibility="collapsed")
+            if cols[3].button("✏️", key=f"save_stakeholder_{row['id']}", help="Save"):
+                db.update_child("stakeholders", row["id"], name=name.strip(), role=role.strip(), email=email.strip())
+                st.session_state[edit_key] = False
+                st.rerun()
+            if cols[4].button("❌", key=f"delete_stakeholder_{row['id']}", help="Delete"):
+                db.delete_child("stakeholders", row["id"])
+                st.session_state[edit_key] = False
+                st.rerun()
+        else:
+            cols[0].write(row["name"])
+            cols[1].write(row["role"] or "—")
+            cols[2].write(row["email"] or "—")
+            if cols[3].button("✏️", key=f"edit_stakeholder_{row['id']}", help="Edit"):
+                st.session_state[edit_key] = True
+                st.rerun()
+
+
+@st.dialog("Add Stakeholder")
+def render_add_stakeholder_dialog(account_id):
+    name = st.text_input("Name", key=f"dialog_stk_name_{account_id}")
+    role = st.text_input("Role", key=f"dialog_stk_role_{account_id}")
+    email = st.text_input("Email", key=f"dialog_stk_email_{account_id}")
+    if st.button("Save", key=f"dialog_stk_save_{account_id}"):
+        if name.strip():
+            db.add_child("stakeholders", account_id, name=name.strip(), role=role.strip(), email=email.strip())
             st.rerun()
 
 
